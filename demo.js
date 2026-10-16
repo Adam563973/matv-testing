@@ -65,123 +65,13 @@
   ['camtag', 'hint', 'labels'].forEach(id => { const el = $(id); if (el) el.style.zIndex = '3'; });
 
   const scene = new THREE.Scene();
-  // Pale blue atmospheric fog blends the distant test-bay floor into the sky.
-  // The sky itself is rendered by a procedural dome just below.
-  scene.background = null;
-  scene.fog = new THREE.Fog(0x91c0e9, 26, 88);
-  const camera = new THREE.PerspectiveCamera(39, 1, 0.1, 140);
-
-  // ---------------- Procedural blue sky and animated clouds ----------------
-  // The cloud field is GPU generated, so no external textures or image assets are needed.
-  // The lighting, cloud silver-lining and metal reflections approximate ray-traced visuals;
-  // Three.js r128's standard WebGL renderer does not provide true hardware ray tracing.
-  const skyUniforms = {
-    uTime: { value: 0 },
-    uSunDirection: { value: new THREE.Vector3(-0.48, 0.47, 0.74).normalize() }
-  };
-  const skyMaterial = new THREE.ShaderMaterial({
-    uniforms: skyUniforms,
-    side: THREE.BackSide,
-    depthWrite: false,
-    depthTest: false,
-    fog: false,
-    toneMapped: false,
-    vertexShader: `
-      varying vec3 vSkyDirection;
-      void main() {
-        vSkyDirection = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      precision highp float;
-      varying vec3 vSkyDirection;
-      uniform float uTime;
-      uniform vec3 uSunDirection;
-
-      float hash21(vec2 p) {
-        p = fract(p * vec2(123.34, 456.21));
-        p += dot(p, p + 45.32);
-        return fract(p.x * p.y);
-      }
-
-      float noise2(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-        f = f * f * (3.0 - 2.0 * f);
-        float a = hash21(i);
-        float b = hash21(i + vec2(1.0, 0.0));
-        float c = hash21(i + vec2(0.0, 1.0));
-        float d = hash21(i + vec2(1.0, 1.0));
-        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-      }
-
-      float fbm(vec2 p) {
-        float value = 0.0;
-        float amplitude = 0.5;
-        mat2 turn = mat2(0.80, -0.60, 0.60, 0.80);
-        for (int i = 0; i < 4; i++) {
-          value += amplitude * noise2(p);
-          p = turn * p * 2.02 + vec2(7.1, 3.7);
-          amplitude *= 0.5;
-        }
-        return value;
-      }
-
-      void main() {
-        vec3 dir = normalize(vSkyDirection);
-        float elevation = clamp(dir.y, -0.12, 1.0);
-        float skyFade = smoothstep(-0.10, 0.84, elevation);
-        vec3 horizonBlue = vec3(0.72, 0.86, 0.98);
-        vec3 zenithBlue = vec3(0.055, 0.30, 0.70);
-        vec3 sky = mix(horizonBlue, zenithBlue, pow(max(skyFade, 0.0), 0.78));
-
-        // Spherical mapping gives continuous clouds while the camera orbits the engine.
-        vec2 cloudUV = vec2(atan(dir.z, dir.x) * 2.25, asin(clamp(dir.y, -1.0, 1.0)) * 3.9);
-        cloudUV += vec2(uTime * 0.009, uTime * 0.0018);
-        float broadCloud = fbm(cloudUV * 1.45);
-        float cloudDetail = fbm(cloudUV * 3.35 + vec2(11.7, 4.3));
-        float wisps = fbm(cloudUV * vec2(6.0, 2.0) + vec2(-uTime * 0.005, 2.8));
-        float density = broadCloud * 0.70 + cloudDetail * 0.22 + wisps * 0.08;
-        float clouds = smoothstep(0.505, 0.675, density);
-        clouds *= smoothstep(-0.19, 0.12, dir.y);
-        // Preserve a little more saturated blue high overhead.
-        clouds *= 1.0 - 0.20 * smoothstep(0.48, 0.92, dir.y);
-
-        float sunDot = max(dot(dir, normalize(uSunDirection)), 0.0);
-        float broadHalo = pow(sunDot, 7.0) * 0.15;
-        float tightHalo = pow(sunDot, 24.0) * 0.19;
-        float sunDisc = pow(sunDot, 220.0) * 0.78;
-        vec3 sunColour = vec3(1.0, 0.88, 0.70);
-
-        // Cloud tops brighten toward the sun; undersides remain cool blue-grey.
-        float cloudLight = clamp(0.67 + sunDot * 0.38 + (cloudDetail - 0.42) * 0.24, 0.42, 1.05);
-        vec3 cloudColour = vec3(0.94, 0.97, 1.0) * cloudLight;
-        float underside = smoothstep(0.48, 0.64, density) * (1.0 - smoothstep(0.68, 0.79, density));
-        cloudColour = mix(cloudColour, vec3(0.54, 0.67, 0.82), underside * 0.42);
-        float silverLining = smoothstep(0.50, 0.57, density) * (1.0 - smoothstep(0.59, 0.68, density));
-        cloudColour += sunColour * silverLining * sunDot * 0.16;
-        sky = mix(sky, cloudColour, clamp(clouds * 0.97, 0.0, 1.0));
-        sky += sunColour * (broadHalo + tightHalo + sunDisc);
-
-        // Soft haze close to the horizon gives the scene atmospheric depth.
-        float horizonGlow = exp(-abs(dir.y) * 7.0) * 0.105;
-        sky += vec3(0.40, 0.62, 0.86) * horizonGlow;
-        gl_FragColor = vec4(sky, 1.0);
-      }
-    `
-  });
-  const skyDome = new THREE.Mesh(new THREE.SphereGeometry(74, 56, 36), skyMaterial);
-  skyDome.name = 'Procedural blue sky and cloud dome';
-  skyDome.frustumCulled = false;
-  skyDome.renderOrder = -1000;
-  skyDome.castShadow = false;
-  skyDome.receiveShadow = false;
-  scene.add(skyDome);
+  scene.background = new THREE.Color(0x080c12);
+  scene.fog = new THREE.Fog(0x080c12, 17, 48);
+  const camera = new THREE.PerspectiveCamera(39, 1, 0.1, 120);
 
   // Studio light cards make metallic surfaces legible without true ray tracing.
   const envScene = new THREE.Scene();
-  envScene.background = new THREE.Color(0x8abbe9); // Blue-sky fill for bright, believable metal reflections.
+  envScene.background = new THREE.Color(0x101722);
   function lightCard(w, h, d, x, y, z, colour, intensity = 1) {
     const mat = new THREE.MeshBasicMaterial({
       color: new THREE.Color(colour).multiplyScalar(intensity),
@@ -840,7 +730,6 @@
   let lastTelemetry = 0;
 
   function updatePose(now) {
-    skyUniforms.uTime.value = now * 0.001;
     const qYaw = new THREE.Quaternion().setFromAxisAngle(V(0,1,0), -state.y * D);
     const qPitch = new THREE.Quaternion().setFromAxisAngle(V(0,0,1), -state.p * D);
     nozzle.quaternion.copy(qYaw).multiply(qPitch);
