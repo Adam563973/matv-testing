@@ -1,22 +1,52 @@
 (() => {
   'use strict';
 
-  // Surface startup/runtime JavaScript errors in the viewport rather than leaving
-  // a blank canvas with no clue what failed.
-  window.addEventListener('error', (event) => {
+  // Runtime diagnostics stay inside the view and never replace the simulation DOM.
+  // Most importantly, a single update exception is contained by the frame loop below.
+  const runtimeFaults = new Set();
+  let contextLost = false;
+  let renderBroken = false;
+  let paused = false;
+  function showRuntimeNotice(message, severity = 'error') {
     const viewEl = document.getElementById('view');
     if (!viewEl) return;
-    let panel = document.getElementById('matv-js-error');
+    let panel = document.getElementById('matv-runtime-notice');
     if (!panel) {
       panel = document.createElement('div');
-      panel.id = 'matv-js-error';
-      panel.style.cssText = 'position:absolute;z-index:10000;left:12px;right:12px;bottom:12px;max-height:32%;overflow:auto;padding:12px;background:rgba(88,18,24,.96);border:1px solid #ff8181;border-radius:6px;color:#fff;font:12px/1.45 monospace;white-space:pre-wrap;pointer-events:auto;';
+      panel.id = 'matv-runtime-notice';
+      panel.setAttribute('role', 'status');
+      panel.style.cssText = 'position:absolute;z-index:10000;left:12px;right:12px;top:48px;max-height:25%;overflow:auto;padding:10px 12px;background:rgba(61,22,20,.95);border:1px solid #ff9a7b;border-radius:7px;color:#fff;font:12px/1.45 ui-monospace,monospace;white-space:pre-wrap;pointer-events:auto;box-shadow:0 8px 24px #0006;';
       viewEl.appendChild(panel);
     }
-    panel.textContent = 'MATV JavaScript error: ' + (event.message || 'Unknown error') +
-      (event.filename ? '\n' + event.filename.split('/').pop() + ':' + event.lineno : '') +
-      '\nOpen browser developer tools (F12) for the full stack trace.';
+    panel.style.background = severity === 'warning' ? 'rgba(31,43,54,.96)' : 'rgba(61,22,20,.95)';
+    panel.style.borderColor = severity === 'warning' ? '#f2c36f' : '#ff9a7b';
+    panel.textContent = 'MATV · ' + message;
+  }
+  function clearRuntimeNotice() {
+    const panel = document.getElementById('matv-runtime-notice');
+    if (panel) panel.remove();
+  }
+  function reportRuntimeFault(area, error, pausePhysics = false) {
+    if (!runtimeFaults.has(area)) {
+      runtimeFaults.add(area);
+      console.error('MATV simulator error in ' + area + ':', error);
+      showRuntimeNotice(area + ' failed. Rendering is being kept alive; use Reset all if controls stop responding.\n' + (error && error.message ? error.message : String(error)));
+    }
+    if (pausePhysics && typeof paused !== 'undefined') {
+      paused = true;
+      const pauseButton = document.getElementById('bPause');
+      if (pauseButton) pauseButton.textContent = 'Resume';
+    }
+  }
+  window.addEventListener('error', (event) => {
     console.error('MATV simulator runtime error:', event.message, event.filename, event.lineno, event.error);
+    showRuntimeNotice((event.message || 'Unexpected JavaScript error') +
+      (event.filename ? '\n' + event.filename.split('/').pop() + ':' + event.lineno : ''));
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason;
+    console.error('MATV simulator promise error:', reason);
+    showRuntimeNotice('A browser feature failed: ' + (reason && reason.message ? reason.message : String(reason)), 'warning');
   });
 
   // F-16 MATV / AVEN nozzle bench — procedural visualisation.
@@ -81,6 +111,26 @@
   renderer.domElement.style.zIndex = '0';
   view.insertBefore(renderer.domElement, view.firstChild);
   ['camtag', 'hint', 'labels'].forEach(id => { const el = $(id); if (el) el.style.zIndex = '3'; });
+  renderer.domElement.addEventListener('webglcontextlost', (event) => {
+    event.preventDefault();
+    contextLost = true;
+    if (typeof paused !== 'undefined') paused = true;
+    showRuntimeNotice('The browser lost the 3D graphics context. The simulation has paused while the browser attempts recovery.', 'warning');
+  });
+  renderer.domElement.addEventListener('webglcontextrestored', () => {
+    contextLost = false;
+    renderBroken = false;
+    renderFallbackTried = false;
+    runtimeFaults.delete('3D render');
+    try {
+      if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
+      resize();
+      clearRuntimeNotice();
+      showRuntimeNotice('3D graphics recovered. Press Resume if the simulation remains paused.', 'warning');
+    } catch (error) {
+      reportRuntimeFault('graphics recovery', error, true);
+    }
+  });
 
   const scene = new THREE.Scene();
   // Pale blue atmospheric fog blends the distant test-bay floor into the sky.
@@ -918,7 +968,6 @@
   let thrust = 0;
   let egtC = 430;
   let actuatorRate = 30;
-  let paused = false;
   let simTime = 0;
   let rateLimited = false;
   const twinState = { p: 0, y: 0 };
@@ -958,7 +1007,10 @@
     if (magnitude > LIM) { p *= LIM / magnitude; y *= LIM / magnitude; }
     cmd.p = clamp(p, -LIM, LIM);
     cmd.y = clamp(y, -LIM, LIM);
-    $('auto').checked = false;
+    if ($('auto').checked) {
+      $('auto').checked = false;
+      updateAutoStatus();
+    }
   }
   const H = 1 / 240;
   function physicsStep(h) {
@@ -1274,23 +1326,38 @@
     const w = Math.max(view.clientWidth, 1);
     const h = Math.max(view.clientHeight, 1);
     const mode = $('quality') ? $('quality').value : 'balanced';
-    const maxDpr = mode === 'high' ? 2 : (mode === 'performance' ? 1 : 1.5);
+    // Cap DPR to avoid the multi-million-pixel buffers that can destabilise
+    // integrated/mobile GPUs. High mode remains intentionally conservative.
+    const maxDpr = mode === 'high' ? 1.5 : (mode === 'performance' ? 1 : 1.25);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   }
   window.addEventListener('resize', resize);
-  if ('ResizeObserver' in window) new ResizeObserver(resize).observe(view);
+  if ('ResizeObserver' in window) new ResizeObserver(() => {
+    try { resize(); } catch (error) { reportRuntimeFault('viewport resize', error, false); }
+  }).observe(view);
   function applyQuality() {
     const mode = $('quality') ? $('quality').value : 'balanced';
-    const maxDpr = mode === 'high' ? 2 : (mode === 'performance' ? 1 : 1.5);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
-    renderer.shadowMap.enabled = mode !== 'performance';
-    renderer.shadowMap.type = mode === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-    key.shadow.mapSize.set(mode === 'high' ? 2048 : (mode === 'performance' ? 512 : 1024), mode === 'high' ? 2048 : (mode === 'performance' ? 512 : 1024));
-    key.shadow.needsUpdate = true;
-    resize();
+    try {
+      const mapSize = mode === 'high' ? 1536 : (mode === 'performance' ? 512 : 768);
+      renderer.shadowMap.enabled = mode !== 'performance';
+      renderer.shadowMap.type = mode === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+      if (key && key.shadow && key.shadow.mapSize) {
+        key.shadow.mapSize.set(mapSize, mapSize);
+        key.shadow.needsUpdate = true;
+      }
+      resize();
+      runtimeFaults.delete('render quality');
+    } catch (error) {
+      console.warn('MATV could not apply the requested render quality; falling back to Performance.', error);
+      renderer.shadowMap.enabled = false;
+      renderer.setPixelRatio(1);
+      if ($('quality')) $('quality').value = 'performance';
+      try { resize(); } catch (_) {}
+      reportRuntimeFault('render quality', error, false);
+    }
   }
   if ($('quality')) $('quality').addEventListener('change', applyQuality);
   applyQuality();
@@ -1395,6 +1462,28 @@
   pitchInput.addEventListener('input', () => { setCommand(Number(pitchInput.value), cmd.y); tryHaptic(5); });
   yawInput.addEventListener('input', () => { setCommand(cmd.p, Number(yawInput.value)); tryHaptic(5); });
   rateInput.addEventListener('input', () => { actuatorRate = Number(rateInput.value); });
+  function updateAutoStatus() {
+    const statusEl = $('simStatus');
+    if (!statusEl) return;
+    if ($('auto').checked) {
+      statusEl.classList.remove('is-warning');
+      statusEl.innerHTML = '<span class="status-dot"></span>AUTO DEMONSTRATION ACTIVE';
+    } else if (statusEl.textContent.includes('AUTO DEMONSTRATION ACTIVE')) {
+      statusEl.innerHTML = '<span class="status-dot"></span>' + (paused ? 'PAUSED' : 'SIMULATION RUNNING');
+      statusEl.classList.toggle('is-warning', paused);
+    }
+  }
+  $('auto').addEventListener('change', () => {
+    // Enabling the demo should always start motion, even if the sim was paused.
+    if ($('auto').checked) {
+      paused = false;
+      accumulator = 0;
+      lastFrame = performance.now();
+      if ($('bPause')) $('bPause').textContent = 'Pause';
+      clearRuntimeNotice();
+    }
+    updateAutoStatus();
+  });
   $('diff').addEventListener('input', () => { $('diffV').textContent = `${fmt(Number($('diff').value),1)}°`; tryHaptic(6); });
   $('flightSpeed').addEventListener('input', () => { flight.speed = Number($('flightSpeed').value); $('speedV').textContent = `${flight.speed.toFixed(0)} m/s`; });
   $('flightAlt').addEventListener('input', () => { flight.altitude = Number($('flightAlt').value); $('altV').textContent = `${flight.altitude.toFixed(0)} m`; });
@@ -1486,6 +1575,10 @@
   $('bPause').addEventListener('click', togglePause);
   $('bReset').addEventListener('click', () => {
     $('auto').checked = false; $('grab').checked = false;
+    runtimeFaults.clear();
+    clearRuntimeNotice();
+    accumulator = 0;
+    lastFrame = performance.now();
     setCommand(0, 0);
     throttleInput.value = 45; throttleCmd = .45;
     rateInput.value = 30; actuatorRate = 30;
@@ -1800,7 +1893,7 @@
       drawHistory();
       const statusEl = $('simStatus');
       if (statusEl) {
-        const statusText = paused ? 'PAUSED' : (rateLimited ? 'ACTUATOR RATE-LIMITED' : 'SIMULATION RUNNING');
+        const statusText = paused ? 'PAUSED' : ($('auto').checked ? 'AUTO DEMONSTRATION ACTIVE' : (rateLimited ? 'ACTUATOR RATE-LIMITED' : 'SIMULATION RUNNING'));
         let dot = statusEl.querySelector('.status-dot');
         if (!dot) { dot = document.createElement('span'); dot.className = 'status-dot'; }
         statusEl.textContent = '';
@@ -1853,40 +1946,74 @@
     setCommand(p, yaw);
   }
 
-  // ---------------- Animation loop ----------------
+  // ---------------- Animation loop with fault isolation ----------------
+  // Each stage is isolated. An exception from physics/UI telemetry/audio may
+  // pause that subsystem, but must not prevent the last valid 3D frame from
+  // rendering or kill the next requestAnimationFrame callback.
   let lastFrame = performance.now();
   let accumulator = 0;
   let fpsFrameCount = 0;
   let fpsWindowStart = lastFrame;
+  let renderFallbackTried = false;
+  function safeFrameStage(name, fn, pausePhysics = false) {
+    try { fn(); return true; }
+    catch (error) { reportRuntimeFault(name, error, pausePhysics); return false; }
+  }
   function frame(now) {
     requestAnimationFrame(frame);
-    const dt = Math.min((now - lastFrame) / 1000, .1);
+    const dt = clamp((now - lastFrame) / 1000, 0, 0.05);
     lastFrame = now;
     fpsFrameCount++;
-    pollGamepad();
+
+    safeFrameStage('controller polling', pollGamepad, false);
     if (now - fpsWindowStart >= 600) {
-      if ($('fpsTag')) $('fpsTag').textContent = `${Math.round(fpsFrameCount * 1000 / (now - fpsWindowStart))} FPS · ${renderer.capabilities.isWebGL2 ? 'WEBGL2' : 'WEBGL'}`;
+      safeFrameStage('performance display', () => {
+        if ($('fpsTag')) $('fpsTag').textContent = `${Math.round(fpsFrameCount * 1000 / Math.max(1, now - fpsWindowStart))} FPS · ${renderer.capabilities.isWebGL2 ? 'WEBGL2' : 'WEBGL'}`;
+      });
       fpsFrameCount = 0;
       fpsWindowStart = now;
     }
-    if (!paused) {
-      accumulator += dt;
+
+    if (!paused && !contextLost) {
+      accumulator = Math.min(accumulator + dt, H * 40);
       let safety = 0;
       while (accumulator >= H && safety < 40) {
-        physicsStep(H); accumulator -= H; safety++;
+        const ok = safeFrameStage('physics update', () => physicsStep(H), true);
+        if (!ok) { accumulator = 0; break; }
+        accumulator -= H;
+        safety++;
+      }
+      if (safety >= 40) accumulator = 0;
+    }
+
+    safeFrameStage('camera update', () => updateCamera(dt), false);
+    safeFrameStage('scene effects update', () => updatePose(now), false);
+    safeFrameStage('audio update', () => updateAudio(now), false);
+    safeFrameStage('control pad display', drawPad, false);
+
+    if (!contextLost && !renderBroken) {
+      const renderOK = safeFrameStage('3D render', () => renderer.render(scene, camera), false);
+      if (!renderOK && !renderFallbackTried) {
+        renderFallbackTried = true;
+        try {
+          renderer.shadowMap.enabled = false;
+          renderer.setPixelRatio(1);
+          renderer.setSize(Math.max(view.clientWidth, 1), Math.max(view.clientHeight, 1), false);
+          renderer.render(scene, camera);
+          showRuntimeNotice('Recovered using low-cost rendering. Render quality was reduced for stability.', 'warning');
+          runtimeFaults.delete('3D render');
+        } catch (error) {
+          renderBroken = true;
+          reportRuntimeFault('3D render fallback', error, true);
+        }
       }
     }
-    updateCamera(dt);
-    updatePose(now);
-    updateAudio(now);
-    drawPad();
-    renderer.render(scene, camera);
   }
 
-  // A small runtime diagnostic if anything in initialisation fails.
-  window.addEventListener('unhandledrejection', e => console.error('MATV simulator promise error:', e.reason));
   $('camtag').textContent = 'INITIALISING SIMULATION…';
   setNozzleMode(); applyAircraftProfile(); setSceneMode();
   console.info('MATV visualisation initialised. Renderer:', renderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1', 'Three.js:', THREE.REVISION);
+  clearRuntimeNotice();
+  updateAutoStatus();
   requestAnimationFrame(frame);
 })();
