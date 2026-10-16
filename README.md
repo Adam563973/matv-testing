@@ -44,3 +44,4 @@ The simulation provides a comprehensive control panel (Test Cell #4):
 
 The simulator is designed to run directly in a modern web browser.
 
+Deployment: https://adam563973.github.io/matv-testing/
