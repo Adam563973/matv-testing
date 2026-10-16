@@ -1,6 +1,24 @@
 (() => {
   'use strict';
 
+  // Surface startup/runtime JavaScript errors in the viewport rather than leaving
+  // a blank canvas with no clue what failed.
+  window.addEventListener('error', (event) => {
+    const viewEl = document.getElementById('view');
+    if (!viewEl) return;
+    let panel = document.getElementById('matv-js-error');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'matv-js-error';
+      panel.style.cssText = 'position:absolute;z-index:10000;left:12px;right:12px;bottom:12px;max-height:32%;overflow:auto;padding:12px;background:rgba(88,18,24,.96);border:1px solid #ff8181;border-radius:6px;color:#fff;font:12px/1.45 monospace;white-space:pre-wrap;pointer-events:auto;';
+      viewEl.appendChild(panel);
+    }
+    panel.textContent = 'MATV JavaScript error: ' + (event.message || 'Unknown error') +
+      (event.filename ? '\n' + event.filename.split('/').pop() + ':' + event.lineno : '') +
+      '\nOpen browser developer tools (F12) for the full stack trace.';
+    console.error('MATV simulator runtime error:', event.message, event.filename, event.lineno, event.error);
+  });
+
   // F-16 MATV / AVEN nozzle bench — procedural visualisation.
   // Uses Three.js r128 WebGL rendering, PBR materials, environment reflections,
   // soft shadow maps and raycasting for pointer interaction. This is not a
@@ -65,13 +83,159 @@
   ['camtag', 'hint', 'labels'].forEach(id => { const el = $(id); if (el) el.style.zIndex = '3'; });
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x080c12);
-  scene.fog = new THREE.Fog(0x080c12, 17, 48);
-  const camera = new THREE.PerspectiveCamera(39, 1, 0.1, 120);
+  // Pale blue atmospheric fog blends the distant test-bay floor into the sky.
+  // The sky itself is rendered by a procedural dome just below.
+  scene.background = null;
+  scene.fog = new THREE.Fog(0x91c0e9, 26, 88);
+  const camera = new THREE.PerspectiveCamera(39, 1, 0.1, 140);
+
+  // ---------------- Reliable blue sky and softly moving clouds ----------------
+  // Use CanvasTexture rather than a custom GLSL sky shader. This avoids shader
+  // compiler differences across browsers while retaining a GPU-rendered sky dome.
+  function makeSkyGradientTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0.00, '#1556b4');
+    gradient.addColorStop(0.20, '#2875d0');
+    gradient.addColorStop(0.42, '#5ca3e5');
+    gradient.addColorStop(0.67, '#a8d3f4');
+    gradient.addColorStop(0.85, '#d8edfc');
+    gradient.addColorStop(1.00, '#a9d0ef');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // A very gentle glow around the horizon keeps the background atmospheric.
+    const haze = ctx.createLinearGradient(0, 300, 0, 512);
+    haze.addColorStop(0, 'rgba(225,244,255,0)');
+    haze.addColorStop(1, 'rgba(229,244,255,0.42)');
+    ctx.fillStyle = haze;
+    ctx.fillRect(0, 300, canvas.width, 212);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.encoding = THREE.sRGBEncoding;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = true;
+    return texture;
+  }
+
+  function makeCloudTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Seeded random numbers make the cloud layout consistent between reloads.
+    let seed = 817263;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+
+    function puff(x, y, rx, ry, alpha, underside = false) {
+      // Draw duplicates over the horizontal edges so the cloud field wraps cleanly.
+      for (const shift of [-canvas.width, 0, canvas.width]) {
+        ctx.save();
+        ctx.translate(x + shift, y);
+        ctx.scale(Math.max(rx, 1), Math.max(ry, 1));
+        const g = ctx.createRadialGradient(0, 0, 0.05, 0, 0, 1);
+        if (underside) {
+          g.addColorStop(0, `rgba(79,121,165,${alpha * 0.42})`);
+          g.addColorStop(0.52, `rgba(105,151,191,${alpha * 0.28})`);
+          g.addColorStop(1, 'rgba(120,160,198,0)');
+        } else {
+          g.addColorStop(0, `rgba(255,255,255,${alpha})`);
+          g.addColorStop(0.46, `rgba(248,252,255,${alpha * 0.88})`);
+          g.addColorStop(0.78, `rgba(235,246,255,${alpha * 0.36})`);
+          g.addColorStop(1, 'rgba(255,255,255,0)');
+        }
+        ctx.fillStyle = g;
+        ctx.fillRect(-1, -1, 2, 2);
+        ctx.restore();
+      }
+    }
+
+    // Several broken cumulus banks with soft, overlapping lobes and cool undersides.
+    for (let bank = 0; bank < 23; bank++) {
+      const cx = rand() * canvas.width;
+      const cy = 145 + rand() * 185;
+      const span = 34 + rand() * 100;
+      const lobes = 5 + Math.floor(rand() * 13);
+      const baseAlpha = 0.32 + rand() * 0.36;
+      puff(cx, cy + 14, span * 0.82, 27 + rand() * 19, 0.40, true);
+      for (let j = 0; j < lobes; j++) {
+        const x = cx + (rand() - 0.5) * span * 1.65;
+        const y = cy + (rand() - 0.54) * 51;
+        const rx = 16 + rand() * 39;
+        const ry = 11 + rand() * 28;
+        puff(x, y + 7, rx * 1.12, ry * 0.8, baseAlpha * 0.62, true);
+        puff(x, y, rx, ry, baseAlpha * (0.78 + rand() * 0.32), false);
+      }
+    }
+
+    // High, thin wisps break up the saturated upper blue without covering it completely.
+    for (let i = 0; i < 62; i++) {
+      const x = rand() * canvas.width;
+      const y = 80 + rand() * 105;
+      puff(x, y, 10 + rand() * 40, 3 + rand() * 7, 0.13 + rand() * 0.13, false);
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.encoding = THREE.sRGBEncoding;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = true;
+    return texture;
+  }
+
+  const skyTexture = makeSkyGradientTexture();
+  const cloudTexture = makeCloudTexture();
+  const skyDome = new THREE.Mesh(
+    new THREE.SphereGeometry(74, 48, 32),
+    new THREE.MeshBasicMaterial({
+      map: skyTexture,
+      side: THREE.BackSide,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false
+    })
+  );
+  skyDome.name = 'Blue atmospheric sky';
+  skyDome.frustumCulled = false;
+  skyDome.renderOrder = -1000;
+  skyDome.castShadow = false;
+  skyDome.receiveShadow = false;
+  scene.add(skyDome);
+
+  const cloudDome = new THREE.Mesh(
+    new THREE.SphereGeometry(73.7, 48, 32),
+    new THREE.MeshBasicMaterial({
+      map: cloudTexture,
+      transparent: true,
+      opacity: 0.94,
+      side: THREE.BackSide,
+      depthWrite: false,
+      // Keep depth testing enabled so clouds are hidden by the engine and floor.
+      depthTest: true,
+      toneMapped: false
+    })
+  );
+  cloudDome.name = 'Soft cumulus cloud layer';
+  cloudDome.frustumCulled = false;
+  cloudDome.renderOrder = -999;
+  cloudDome.castShadow = false;
+  cloudDome.receiveShadow = false;
+  scene.add(cloudDome);
 
   // Studio light cards make metallic surfaces legible without true ray tracing.
   const envScene = new THREE.Scene();
-  envScene.background = new THREE.Color(0x101722);
+  envScene.background = new THREE.Color(0x8abbe9); // Blue-sky fill for bright, believable metal reflections.
   function lightCard(w, h, d, x, y, z, colour, intensity = 1) {
     const mat = new THREE.MeshBasicMaterial({
       color: new THREE.Color(colour).multiplyScalar(intensity),
@@ -730,6 +894,8 @@
   let lastTelemetry = 0;
 
   function updatePose(now) {
+    // Slowly drift the translucent cloud layer; leave the sky gradient fixed.
+    cloudTexture.offset.x = (now * 0.00000010) % 1;
     const qYaw = new THREE.Quaternion().setFromAxisAngle(V(0,1,0), -state.y * D);
     const qPitch = new THREE.Quaternion().setFromAxisAngle(V(0,0,1), -state.p * D);
     nozzle.quaternion.copy(qYaw).multiply(qPitch);
@@ -827,7 +993,6 @@
   }
 
   // A small runtime diagnostic if anything in initialisation fails.
-  window.addEventListener('error', e => console.error('MATV simulator runtime error:', e.message, e.filename, e.lineno));
   window.addEventListener('unhandledrejection', e => console.error('MATV simulator promise error:', e.reason));
   $('camtag').textContent = 'INITIALISING SIMULATION…';
   console.info('MATV visualisation initialised. Renderer:', renderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1', 'Three.js:', THREE.REVISION);
