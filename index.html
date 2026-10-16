@@ -1,317 +1,130 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#07090c">
-  <title>F-16 MATV · AVEN Nozzle Bench</title>
-
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#070d16">
+  <meta name="description" content="Interactive illustrative F-16 MATV thrust-vectoring nozzle bench simulation.">
+  <title>MATV Lab · Thrust Vectoring Simulator</title>
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
   <link rel="stylesheet" href="./demo.css">
-
-  <!-- Load Three.js before the simulation code -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-
-  <style>
-    html, body {
-      width: 100%;
-      height: 100%;
-      margin: 0;
-      overflow: hidden;
-      background: #07090c;
-      color: #dce5ef;
-      font-family: Arial, Helvetica, sans-serif;
-    }
-
-    #app {
-      display: flex;
-      width: 100%;
-      height: 100vh;
-      height: 100dvh;
-      overflow: hidden;
-    }
-
-    #view {
-      position: relative;
-      flex: 1 1 auto;
-      min-width: 0;
-      min-height: 0;
-      overflow: hidden;
-      background: #07090c;
-      touch-action: none;
-    }
-
-    #view canvas:not(#pad) {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
-
-    #panel {
-      box-sizing: border-box;
-      flex: 0 0 340px;
-      width: 340px;
-      height: 100%;
-      overflow-y: auto;
-      padding: 18px;
-      background: #10151c;
-      border-left: 1px solid #263342;
-    }
-
-    #panel h1 {
-      margin: 0 0 18px;
-      font-size: 19px;
-      line-height: 1.4;
-    }
-
-    #panel h1 small {
-      display: block;
-      margin-top: 5px;
-      color: #93a5b8;
-      font-size: 11px;
-      font-weight: normal;
-    }
-
-    #panel label {
-      display: block;
-      margin: 15px 0 7px;
-      color: #dce5ef;
-      font-size: 12px;
-    }
-
-    #panel label b {
-      float: right;
-      color: #35d0ff;
-    }
-
-    #panel label i {
-      display: block;
-      margin-top: 4px;
-      color: #8c9bad;
-      font-size: 11px;
-      font-style: normal;
-    }
-
-    #panel input[type="range"] {
-      width: 100%;
-      accent-color: #35d0ff;
-    }
-
-    #pad {
-      display: block;
-      width: 180px;
-      height: 180px;
-      max-width: 100%;
-      border: 1px solid #263342;
-      border-radius: 8px;
-      background: #090d12;
-      touch-action: none;
-    }
-
-    .btns {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
-      margin: 16px 0;
-    }
-
-    .btns button {
-      flex: 1 1 auto;
-      padding: 9px 10px;
-      border: 1px solid #35475b;
-      border-radius: 5px;
-      background: #1a2634;
-      color: #e7f1fb;
-      cursor: pointer;
-    }
-
-    .btns button:hover {
-      background: #26384b;
-    }
-
-    #panel label.chk {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      line-height: 1.4;
-    }
-
-    #tele {
-      width: 100%;
-      margin-top: 18px;
-      border-collapse: collapse;
-      font-family: monospace;
-      font-size: 11px;
-    }
-
-    #tele td {
-      padding: 6px 3px;
-      border-bottom: 1px solid #263342;
-    }
-
-    #tele td:first-child {
-      color: #9aabbd;
-    }
-
-    #tele td:last-child {
-      color: #35d0ff;
-      text-align: right;
-    }
-
-    #panel details {
-      margin-top: 18px;
-      color: #aebdcd;
-      font-size: 12px;
-      line-height: 1.6;
-    }
-
-    #panel summary {
-      color: #e7f1fb;
-      cursor: pointer;
-    }
-
-    #panel code {
-      color: #70d9f5;
-    }
-
-    #camtag {
-      position: absolute;
-      z-index: 2;
-      top: 14px;
-      left: 14px;
-      color: #9fc4e5;
-      font: 11px monospace;
-      pointer-events: none;
-    }
-
-    #hint {
-      position: absolute;
-      z-index: 2;
-      bottom: 14px;
-      left: 14px;
-      color: #91a2b4;
-      font-size: 11px;
-      pointer-events: none;
-    }
-
-    #labels {
-      position: absolute;
-      inset: 0;
-      overflow: hidden;
-      pointer-events: none;
-    }
-
-    .lab {
-      position: absolute;
-      padding: 4px 6px;
-      border: 1px solid #33495e;
-      border-radius: 3px;
-      background: rgba(7, 9, 12, 0.82);
-      color: #b9d7ee;
-      font: 10px monospace;
-      white-space: nowrap;
-      transform: translate(-50%, -50%);
-      pointer-events: none;
-    }
-
-    @media (max-width: 760px) {
-      #app {
-        flex-direction: column;
-      }
-
-      #view {
-        flex: 1 1 55%;
-        min-height: 240px;
-      }
-
-      #panel {
-        flex: 0 0 45%;
-        width: 100%;
-        height: 45%;
-        padding: 12px 16px;
-        border-left: none;
-        border-top: 1px solid #263342;
-      }
-
-      #panel h1 {
-        font-size: 17px;
-      }
-
-      #pad {
-        width: 150px;
-        height: 150px;
-      }
-    }
-  </style>
 </head>
-
 <body>
-  <div id="app">
-    <div id="view">
-      <div id="camtag"></div>
-      <div id="hint">Drag: orbit · Wheel: zoom · E: next camera view</div>
-      <div id="labels"></div>
-    </div>
+  <main id="app">
+    <section id="view" aria-label="Interactive 3D engine simulation">
+      <div class="scene-wash" aria-hidden="true"></div>
+      <div id="camtag">INITIALISING SIMULATION…</div>
+      <div class="view-heading">
+        <div class="eyebrow">ADVANCED PROPULSION SYSTEMS · TEST CELL 04</div>
+        <div class="view-title">MATV / AVEN <span>VECTORING ENGINE</span></div>
+      </div>
+      <div class="view-status-row">
+        <span id="simStatus" class="status-chip"><span class="status-dot"></span> INITIALISING</span>
+        <span id="fpsTag" class="micro-chip">REAL-TIME VIEW</span>
+      </div>
+      <div class="scene-vignette" aria-hidden="true"></div>
+      <div id="labels" aria-hidden="true"></div>
+      <div class="view-bottom">
+        <div id="hint">DRAG TO ORBIT <span>·</span> WHEEL TO ZOOM <span>·</span> E TO CHANGE CAMERA <span>·</span> SPACE TO PAUSE</div>
+        <div class="view-footer-right">MODEL: AVEN NOZZLE <span> / </span> MODE: ILLUSTRATIVE</div>
+      </div>
+      <div class="orientation-tag"><span class="orientation-mark">XYZ</span> ENGINE AXES</div>
+    </section>
 
-    <aside id="panel">
-      <h1>
-        F-16 MATV · AVEN nozzle bench
-        <small>Illustrative simulation — not real control software</small>
-      </h1>
+    <aside id="panel" aria-label="Simulation control panel">
+      <header class="panel-header">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <div class="brand-copy">
+          <div class="brand-overline">PROPULSION LABORATORY</div>
+          <h1>MATV <span>SIMULATOR</span></h1>
+        </div>
+        <div class="version-chip">v2.0</div>
+      </header>
 
-      <label for="thr">Throttle command <b id="thrV">45 %</b></label>
-      <input type="range" id="thr" min="0" max="100" value="45">
-
-      <label for="pad">
-        Nozzle command pad
-        <i>Drag to command movement; release to hold</i>
-      </label>
-      <canvas id="pad" width="180" height="180"></canvas>
-
-      <label for="pit">Pitch cmd <b id="pitV">+0.0°</b></label>
-      <input type="range" id="pit" min="-17" max="17" step="0.1" value="0">
-
-      <label for="yaw">Yaw cmd <b id="yawV">+0.0°</b></label>
-      <input type="range" id="yaw" min="-17" max="17" step="0.1" value="0">
-
-      <label for="rate">Actuator max rate <b id="rateV">30 °/s</b></label>
-      <input type="range" id="rate" min="3" max="60" step="1" value="30">
-
-      <div class="btns">
-        <button type="button" id="bCentre">Centre nozzle</button>
-        <button type="button" id="bPause">Pause</button>
-        <button type="button" id="bReset">Reset all</button>
+      <div class="panel-subhead">
+        <div><span class="live-pip"></span> DIGITAL TEST CELL</div>
+        <label class="quality-picker" for="quality"><span>RENDER</span><select id="quality" aria-label="Rendering quality"><option value="performance">Performance</option><option value="balanced" selected>Balanced</option><option value="high">High</option></select></label>
       </div>
 
-      <label class="chk">
-        <input type="checkbox" id="grab">
-        Drag directly on 3D nozzle (otherwise orbit)
-      </label>
+      <section class="control-section">
+        <div class="section-title"><span>01</span> ENGINE COMMANDS <span class="section-line"></span></div>
+        <label class="control-label" for="thr"><span>Throttle command</span><output id="thrV">45 %</output></label>
+        <input class="range range-throttle" type="range" id="thr" min="0" max="100" value="45" aria-label="Throttle command">
+        <div class="range-scale"><span>IDLE</span><span>MIL / AB SIMULATED</span><span>MAX</span></div>
+      </section>
 
-      <label class="chk">
-        <input type="checkbox" id="auto">
-        Automatic nozzle demo
-      </label>
+      <section class="control-section vector-section">
+        <div class="section-title"><span>02</span> THRUST VECTOR CONTROL <span class="section-line"></span></div>
+        <div class="pad-row">
+          <div class="pad-wrap">
+            <div class="pad-title">COMMAND / ACTUAL</div>
+            <canvas id="pad" width="180" height="180" aria-label="Pitch and yaw command pad"></canvas>
+          </div>
+          <div class="pad-legend">
+            <div><i class="legend-dot command"></i><span>Command</span></div>
+            <div><i class="legend-dot actual"></i><span>Actual</span></div>
+            <p>Drag in the pad to command pitch and yaw together. Deflection limit is 17° resultant.</p>
+          </div>
+        </div>
+        <label class="control-label" for="pit"><span>Pitch command</span><output id="pitV">+0.0°</output></label>
+        <input class="range" type="range" id="pit" min="-17" max="17" step="0.1" value="0">
+        <div class="range-scale"><span>−17°</span><span>NEUTRAL</span><span>+17°</span></div>
+        <label class="control-label" for="yaw"><span>Yaw command</span><output id="yawV">+0.0°</output></label>
+        <input class="range" type="range" id="yaw" min="-17" max="17" step="0.1" value="0">
+        <div class="range-scale"><span>−17°</span><span>NEUTRAL</span><span>+17°</span></div>
+      </section>
 
-      <table id="tele"></table>
+      <section class="control-section">
+        <div class="section-title"><span>03</span> DYNAMICS <span class="section-line"></span></div>
+        <label class="control-label" for="rate"><span>Actuator rate limit</span><output id="rateV">30 °/s</output></label>
+        <input class="range" type="range" id="rate" min="3" max="60" step="1" value="30">
+        <div class="range-scale"><span>3°/s</span><span>SERVO SPEED</span><span>60°/s</span></div>
+        <label class="control-label" for="spool"><span>Engine spool time constant</span><output id="spoolV">1.4 s</output></label>
+        <input class="range" type="range" id="spool" min="0.4" max="3.0" step="0.1" value="1.4">
+        <div class="range-scale"><span>FAST</span><span>THRUST RESPONSE</span><span>SLOW</span></div>
+        <div class="check-grid">
+          <label class="toggle-row" for="auto"><input type="checkbox" id="auto"><span class="toggle-ui"></span><span><b>Auto demonstration</b><small>Continuous vector sweep</small></span></label>
+          <label class="toggle-row" for="grab"><input type="checkbox" id="grab"><span class="toggle-ui"></span><span><b>Direct nozzle drag</b><small>Grab nozzle in 3D view</small></span></label>
+          <label class="toggle-row" for="vfx"><input type="checkbox" id="vfx" checked><span class="toggle-ui"></span><span><b>Exhaust VFX</b><small>Glow and hot particles</small></span></label>
+          <label class="toggle-row" for="forceToggle"><input type="checkbox" id="forceToggle" checked><span class="toggle-ui"></span><span><b>Force vector</b><small>Show reaction direction</small></span></label>
+        </div>
+      </section>
 
-      <details open>
-        <summary>Thrust-vectoring physics</summary>
-        <p>
-          Engine thrust follows a first-order spool:
-          <code>dT/dt = (T_cmd − T) / τ</code>.
-          The nozzle swings about a spherical pivot. The exhaust direction
-          and engine reaction force are illustrative.
-        </p>
-        <p>
-          Model axes: forward = −X, up = +Y, right = −Z.
-          Pitch and yaw commands drive the simulated nozzle and actuators.
-        </p>
+      <div class="action-grid" aria-label="Simulation actions">
+        <button type="button" class="btn btn-primary" id="bCentre">Centre nozzle</button>
+        <button type="button" class="btn" id="bPause">Pause</button>
+        <button type="button" class="btn" id="bCamera">Next camera</button>
+        <button type="button" class="btn btn-quiet" id="bReset">Reset all</button>
+      </div>
+
+      <section class="audio-card">
+        <div class="audio-icon" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <div class="audio-copy"><b>ENGINE AUDIO</b><span id="audioStatus">AUDIO MUTED · CLICK TO ENABLE</span></div>
+        <button type="button" id="audioBtn" class="btn btn-audio">Enable</button>
+      </section>
+
+      <section class="control-section telemetry-section">
+        <div class="section-title"><span>04</span> LIVE TELEMETRY <span class="section-line"></span></div>
+        <div class="telemetry-table-wrap"><table id="tele" aria-label="Live simulator telemetry"></table></div>
+        <div class="telemetry-footnote">Values marked EST. are model estimates, not certified engine data.</div>
+      </section>
+
+      <section class="control-section chart-section">
+        <div class="section-title"><span>05</span> RESPONSE HISTORY <span class="section-line"></span></div>
+        <div class="chart-legend"><span><i class="chart-line thrust-line"></i> THRUST FRACTION</span><span><i class="chart-line temp-line"></i> EGT (NORMALISED)</span></div>
+        <canvas id="simChart" width="720" height="180" aria-label="Thrust and exhaust temperature response history"></canvas>
+      </section>
+
+      <details class="physics-notes">
+        <summary>MODEL NOTES & LIMITATIONS</summary>
+        <p>The simulator integrates a fixed-step actuator model, a first-order asymmetric engine spool response, angle/rate saturation, estimated thrust components, thermal lag, and simplified nozzle area behaviour.</p>
+        <p>Audio is generated locally using Web Audio oscillators and filtered noise. It is an effect, not a recording. Visual reflections and glow approximate advanced rendering; no hardware ray tracing is used.</p>
+        <p>This is an educational visualisation. It is not an F-16 flight model, maintenance tool, engine performance map, or certified engineering simulation.</p>
       </details>
+      <footer class="panel-footer"><span>MATV LAB / INTERACTIVE MODEL</span><span>BUILT FOR EXPLORATION</span></footer>
     </aside>
-  </div>
-
-  <!-- Keep this after all HTML elements and after Three.js -->
+  </main>
   <script src="./demo.js"></script>
 </body>
 </html>
-```
