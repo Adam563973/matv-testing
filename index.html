@@ -7,7 +7,7 @@
   <meta name="description" content="Interactive illustrative F-16 MATV thrust-vectoring nozzle bench simulation.">
   <title>MATV Lab · Thrust Vectoring Simulator</title>
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
-  <link rel="stylesheet" href="./demo.css?v=3.2-toggle-guard">
+  <link rel="stylesheet" href="./demo.css?v=3.3-toggle-safe">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
@@ -49,12 +49,12 @@
           <div class="brand-overline">PROPULSION LABORATORY</div>
           <h1>MATV <span>SIMULATOR</span></h1>
         </div>
-        <div class="version-chip">v3.2</div>
+        <div class="version-chip">v3.3 TOGGLE-SAFE</div>
       </header>
 
       <div class="panel-subhead">
         <div><span class="live-pip"></span> DIGITAL TEST CELL</div>
-        <label class="quality-picker" for="quality"><span>RENDER</span><select id="quality" aria-label="Rendering quality"><option value="performance">Performance</option><option value="balanced" selected>Balanced</option><option value="high">High</option></select></label>
+        <label class="quality-picker" for="quality"><span>RENDER</span><select id="quality" aria-label="Rendering quality"><option value="performance" selected>Performance</option><option value="balanced">Balanced</option><option value="high">High</option></select></label>
       </div>
 
       <section class="control-section mode-section">
@@ -187,6 +187,6 @@
       <footer class="panel-footer"><span>MATV LAB / INTERACTIVE MODEL</span><span>BUILT FOR EXPLORATION</span></footer>
     </aside>
   </main>
-  <script src="./demo.js?v=3.2-toggle-guard"></script>
+  <script src="./demo.js?v=3.3-toggle-safe"></script>
 </body>
 </html>
