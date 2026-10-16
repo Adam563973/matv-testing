@@ -42,7 +42,7 @@
   const PI = Math.PI;
   const LIM = 17;
   const TMAX = 130;
-  const TAU = 1.4;
+  let TAU = 1.4;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const wrap = (a) => ((a + PI) % (2 * PI) + 2 * PI) % (2 * PI) - PI;
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -632,6 +632,23 @@
   exhaustLight.position.set(1.1, 0, 0);
   nozzle.add(exhaustLight);
 
+  // Lightweight exhaust particulate VFX. Particles are deterministic from frame
+  // time, so they need no per-particle physics or random allocation each frame.
+  const exhaustParticleCount = 120;
+  const exhaustParticlePositions = new Float32Array(exhaustParticleCount * 3);
+  const exhaustParticleGeometry = new THREE.BufferGeometry();
+  exhaustParticleGeometry.setAttribute('position', new THREE.BufferAttribute(exhaustParticlePositions, 3));
+  const exhaustParticleMaterial = new THREE.PointsMaterial({
+    color: 0xffb36a, size: 0.045, transparent: true, opacity: 0.6,
+    depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true
+  });
+  const exhaustParticles = new THREE.Points(exhaustParticleGeometry, exhaustParticleMaterial);
+  exhaustParticles.frustumCulled = false;
+  exhaustParticles.renderOrder = 6;
+  nozzle.add(exhaustParticles);
+  exhaustParticlePositions.fill(0);
+  exhaustParticleGeometry.attributes.position.needsUpdate = true;
+
   const forceArrow = new THREE.ArrowHelper(V(-1, 0, 0), V(pivotX, 0, 0), 1, 0x35d0ff, .22, .11);
   forceArrow.renderOrder = 10;
   [forceArrow.line.material, forceArrow.cone.material].forEach(m => {
@@ -672,6 +689,7 @@
   const velocity = { p: 0, y: 0 };
   let throttleCmd = .45;
   let thrust = 0;
+  let egtC = 430;
   let actuatorRate = 30;
   let paused = false;
   let simTime = 0;
@@ -692,7 +710,14 @@
       const mag = Math.hypot(cmd.p, cmd.y);
       if (mag > LIM) { cmd.p *= LIM / mag; cmd.y *= LIM / mag; }
     }
-    thrust += (throttleCmd - thrust) * h / TAU;
+    // First-order spool response with asymmetric spool-up / spool-down lag.
+    // TAU is an adjustable time constant; the response is integrated exactly
+    // over the fixed step rather than using a timestep-sensitive Euler gain.
+    const spoolTau = Math.max(0.18, TAU * (throttleCmd > thrust ? 0.82 : 1.35));
+    thrust += (throttleCmd - thrust) * (1 - Math.exp(-h / spoolTau));
+    thrust = clamp(thrust, 0, 1);
+    const egtTarget = 430 + 720 * Math.pow(thrust, 0.78);
+    egtC += (egtTarget - egtC) * (1 - Math.exp(-h / 4.8));
     rateLimited = false;
     ['p', 'y'].forEach(axis => {
       const error = cmd[axis] - state[axis];
@@ -705,6 +730,117 @@
         velocity[axis] = 0;
       }
     });
+    // Limit resultant deflection to the gimbal's 17-degree envelope, not just
+    // each axis independently. Remove outward radial velocity at the stop.
+    const actualDeflection = Math.hypot(state.p, state.y);
+    if (actualDeflection > LIM) {
+      state.p *= LIM / actualDeflection;
+      state.y *= LIM / actualDeflection;
+      const radialVelocity = (velocity.p * state.p + velocity.y * state.y) / LIM;
+      if (radialVelocity > 0) {
+        velocity.p -= radialVelocity * state.p / LIM;
+        velocity.y -= radialVelocity * state.y / LIM;
+      }
+      rateLimited = true;
+    }
+  }
+
+  // ---------------- Procedural audio (starts only after a user gesture) ----------------
+  // No external audio files are required. Layered oscillators and filtered noise
+  // approximate low turbine rumble, core whine, exhaust hiss, and actuator servos.
+  let audioContext = null;
+  let audioMaster = null;
+  let audioNodes = null;
+  let audioEnabled = false;
+  let lastAudioUpdate = 0;
+
+  function createAudioSystem() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) throw new Error('Web Audio is not supported by this browser.');
+    audioContext = new AudioContextClass();
+    audioMaster = audioContext.createGain();
+    audioMaster.gain.value = 0;
+    audioMaster.connect(audioContext.destination);
+
+    const rumble = audioContext.createOscillator();
+    rumble.type = 'sawtooth';
+    const rumbleFilter = audioContext.createBiquadFilter();
+    rumbleFilter.type = 'lowpass'; rumbleFilter.frequency.value = 130; rumbleFilter.Q.value = 0.65;
+    const rumbleGain = audioContext.createGain(); rumbleGain.gain.value = 0.018;
+    rumble.connect(rumbleFilter); rumbleFilter.connect(rumbleGain); rumbleGain.connect(audioMaster);
+
+    const whine = audioContext.createOscillator();
+    whine.type = 'triangle';
+    const whineGain = audioContext.createGain(); whineGain.gain.value = 0.008;
+    whine.connect(whineGain); whineGain.connect(audioMaster);
+
+    const harmonic = audioContext.createOscillator();
+    harmonic.type = 'sine';
+    const harmonicGain = audioContext.createGain(); harmonicGain.gain.value = 0.004;
+    harmonic.connect(harmonicGain); harmonicGain.connect(audioMaster);
+
+    const noiseBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 2, audioContext.sampleRate);
+    const noiseData = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < noiseData.length; i++) noiseData[i] = (Math.random() * 2 - 1) * 0.55;
+    const hiss = audioContext.createBufferSource();
+    hiss.buffer = noiseBuffer; hiss.loop = true;
+    const hissFilter = audioContext.createBiquadFilter();
+    hissFilter.type = 'bandpass'; hissFilter.frequency.value = 700; hissFilter.Q.value = 0.45;
+    const hissGain = audioContext.createGain(); hissGain.gain.value = 0;
+    hiss.connect(hissFilter); hissFilter.connect(hissGain); hissGain.connect(audioMaster);
+
+    const servo = audioContext.createOscillator();
+    servo.type = 'sine'; servo.frequency.value = 260;
+    const servoFilter = audioContext.createBiquadFilter();
+    servoFilter.type = 'lowpass'; servoFilter.frequency.value = 900;
+    const servoGain = audioContext.createGain(); servoGain.gain.value = 0;
+    servo.connect(servoFilter); servoFilter.connect(servoGain); servoGain.connect(audioMaster);
+
+    rumble.start(); whine.start(); harmonic.start(); hiss.start(); servo.start();
+    audioNodes = { rumble, rumbleFilter, rumbleGain, whine, whineGain, harmonic, harmonicGain, hissFilter, hissGain, servo, servoFilter, servoGain };
+  }
+
+  async function toggleAudio() {
+    try {
+      if (!audioContext) {
+        createAudioSystem();
+        audioEnabled = true;
+      } else {
+        audioEnabled = !audioEnabled;
+      }
+      if (audioEnabled && audioContext.state === 'suspended') await audioContext.resume();
+      if (audioMaster && audioContext) {
+        audioMaster.gain.cancelScheduledValues(audioContext.currentTime);
+        audioMaster.gain.setTargetAtTime(audioEnabled ? 0.58 : 0, audioContext.currentTime, 0.10);
+      }
+      $('audioBtn').textContent = audioEnabled ? 'Mute engine sound' : 'Enable engine sound';
+      $('audioStatus').textContent = audioEnabled ? 'AUDIO ACTIVE · SYNTHESISED' : 'AUDIO MUTED';
+      $('audioStatus').classList.toggle('is-active', audioEnabled);
+    } catch (error) {
+      audioEnabled = false;
+      $('audioStatus').textContent = 'AUDIO UNAVAILABLE';
+      console.warn('MATV audio could not start:', error);
+    }
+  }
+
+  function updateAudio(now) {
+    if (!audioContext || !audioNodes || now - lastAudioUpdate < 55) return;
+    lastAudioUpdate = now;
+    const t = audioContext.currentTime;
+    const load = Math.pow(Math.max(0, thrust), 0.68);
+    const servoMotion = clamp((Math.abs(velocity.p) + Math.abs(velocity.y)) / Math.max(8, actuatorRate * 1.25), 0, 1);
+    const glide = (param, value, tau = 0.08) => param.setTargetAtTime(value, t, tau);
+    glide(audioNodes.rumble.frequency, 34 + 41 * load);
+    glide(audioNodes.rumbleGain.gain, 0.012 + 0.060 * load);
+    glide(audioNodes.rumbleFilter.frequency, 105 + 145 * load);
+    glide(audioNodes.whine.frequency, 120 + 220 * load);
+    glide(audioNodes.whineGain.gain, 0.005 + 0.034 * load);
+    glide(audioNodes.harmonic.frequency, 255 + 490 * load);
+    glide(audioNodes.harmonicGain.gain, 0.003 + 0.012 * load);
+    glide(audioNodes.hissFilter.frequency, 420 + 2350 * load);
+    glide(audioNodes.hissGain.gain, 0.003 + 0.025 * load);
+    glide(audioNodes.servo.frequency, 210 + 310 * servoMotion);
+    glide(audioNodes.servoGain.gain, servoMotion * 0.043);
   }
 
   // ---------------- Camera controls ----------------
@@ -745,14 +881,27 @@
   function resize() {
     const w = Math.max(view.clientWidth, 1);
     const h = Math.max(view.clientHeight, 1);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const mode = $('quality') ? $('quality').value : 'balanced';
+    const maxDpr = mode === 'high' ? 2 : (mode === 'performance' ? 1 : 1.5);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   }
   window.addEventListener('resize', resize);
   if ('ResizeObserver' in window) new ResizeObserver(resize).observe(view);
-  resize();
+  function applyQuality() {
+    const mode = $('quality') ? $('quality').value : 'balanced';
+    const maxDpr = mode === 'high' ? 2 : (mode === 'performance' ? 1 : 1.5);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
+    renderer.shadowMap.enabled = mode !== 'performance';
+    renderer.shadowMap.type = mode === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    key.shadow.mapSize.set(mode === 'high' ? 2048 : (mode === 'performance' ? 512 : 1024), mode === 'high' ? 2048 : (mode === 'performance' ? 512 : 1024));
+    key.shadow.needsUpdate = true;
+    resize();
+  }
+  if ($('quality')) $('quality').addEventListener('change', applyQuality);
+  applyQuality();
 
   // ---------------- Input: orbit, zoom, optional nozzle pick-drag ----------------
   const raycaster = new THREE.Raycaster();
@@ -853,6 +1002,17 @@
   yawInput.addEventListener('input', () => setCommand(cmd.p, Number(yawInput.value)));
   rateInput.addEventListener('input', () => { actuatorRate = Number(rateInput.value); });
   $('bCentre').addEventListener('click', () => setCommand(0, 0));
+  if ($('spool')) {
+    $('spool').addEventListener('input', () => {
+      TAU = Number($('spool').value);
+      if ($('spoolV')) $('spoolV').textContent = `${TAU.toFixed(1)} s`;
+    });
+  }
+  if ($('audioBtn')) $('audioBtn').addEventListener('click', toggleAudio);
+  if ($('bCamera')) $('bCamera').addEventListener('click', () => setPreset(presetIndex + 1));
+  if ($('forceToggle')) $('forceToggle').addEventListener('change', () => {
+    forceArrow.visible = $('forceToggle').checked && thrust > 0.01;
+  });
   function togglePause() {
     paused = !paused;
     $('bPause').textContent = paused ? 'Resume' : 'Pause';
@@ -863,6 +1023,11 @@
     setCommand(0, 0);
     throttleInput.value = 45; throttleCmd = .45;
     rateInput.value = 30; actuatorRate = 30;
+    if ($('spool')) $('spool').value = 1.4;
+    TAU = 1.4;
+    if ($('spoolV')) $('spoolV').textContent = '1.4 s';
+    if ($('vfx')) $('vfx').checked = true;
+    if ($('forceToggle')) $('forceToggle').checked = true;
     paused = false; $('bPause').textContent = 'Pause';
     setPreset(0);
   });
@@ -873,7 +1038,10 @@
     ['def','Total deflection'], ['fwd','Axial component'],
     ['ver','Vertical component'], ['lat','Lateral component'],
     ['sts','Actuator status'], ['a0','Actuator 1 travel'],
-    ['a1','Actuator 2 travel'], ['a2','Actuator 3 travel']
+    ['a1','Actuator 2 travel'], ['a2','Actuator 3 travel'],
+    ['n2','Core speed estimate'], ['egt','Estimated exhaust temperature'],
+    ['fuel','Estimated fuel flow'], ['area','Effective exit area'],
+    ['exh','Estimated exhaust speed'], ['tor','Vectoring moment magnitude']
   ];
   $('tele').innerHTML = rows.map(([key, label]) => `<tr><td>${label}</td><td id="t_${key}">—</td></tr>`).join('');
   const telemetry = {};
@@ -892,6 +1060,37 @@
   });
   const projected = V(0,0,0);
   let lastTelemetry = 0;
+  const chart = $('simChart');
+  const chartCtx = chart ? chart.getContext('2d') : null;
+  const history = [];
+  function drawHistory() {
+    if (!chart || !chartCtx) return;
+    const w = chart.width, h = chart.height;
+    chartCtx.clearRect(0, 0, w, h);
+    chartCtx.fillStyle = '#0a111b'; chartCtx.fillRect(0, 0, w, h);
+    chartCtx.lineWidth = 1; chartCtx.strokeStyle = 'rgba(100,140,180,.18)';
+    for (let i = 1; i < 5; i++) {
+      const y = h * i / 5;
+      chartCtx.beginPath(); chartCtx.moveTo(0, y); chartCtx.lineTo(w, y); chartCtx.stroke();
+    }
+    chartCtx.strokeStyle = 'rgba(100,140,180,.12)';
+    for (let i = 1; i < 8; i++) {
+      const x = w * i / 8;
+      chartCtx.beginPath(); chartCtx.moveTo(x, 0); chartCtx.lineTo(x, h); chartCtx.stroke();
+    }
+    const plot = (key, colour, mapFn) => {
+      if (history.length < 2) return;
+      chartCtx.beginPath(); chartCtx.strokeStyle = colour; chartCtx.lineWidth = 2;
+      history.forEach((sample, i) => {
+        const x = i / Math.max(1, history.length - 1) * (w - 8) + 4;
+        const y = h - 5 - clamp(mapFn(sample[key]), 0, 1) * (h - 10);
+        if (i === 0) chartCtx.moveTo(x, y); else chartCtx.lineTo(x, y);
+      });
+      chartCtx.stroke();
+    };
+    plot('thrust', '#42d6ff', v => v);
+    plot('egt', '#ffb469', v => (v - 350) / 850);
+  }
 
   function updatePose(now) {
     // Slowly drift the translucent cloud layer; leave the sky gradient fixed.
@@ -926,18 +1125,33 @@
 
     const exhaustDirection = V(1,0,0).applyQuaternion(nozzle.quaternion);
     const active = thrust > .018;
-    plume.visible = active;
-    const flicker = 1 + .018 * Math.sin(now * .012) + .012 * Math.sin(now * .027);
+    const vfxEnabled = !$('vfx') || $('vfx').checked;
+    plume.visible = active && vfxEnabled;
+    const flicker = 1 + .018 * Math.sin(now * .012) + .012 * Math.sin(now * .027) + .012 * Math.sin(now * .061);
     plume.scale.set((.30 + 2.0 * thrust) * flicker, .50, .50);
-    plumeOuter.material.opacity = .34 * thrust;
-    plumeInner.material.opacity = .54 * thrust;
-    exhaustLight.intensity = 10 * thrust;
+    plumeOuter.material.opacity = vfxEnabled ? .34 * thrust : 0;
+    plumeInner.material.opacity = vfxEnabled ? .54 * thrust : 0;
+    exhaustLight.intensity = vfxEnabled ? 10 * thrust : 0;
     hotCore.material.color.setRGB(.12 + .65*thrust, .025 + .10*thrust, .012);
+
+    // A few glowing tracer particles add depth to the exhaust plume without a
+    // post-processing dependency. Their cloud follows the vectored nozzle.
+    const particleArray = exhaustParticleGeometry.attributes.position.array;
+    for (let i = 0; i < exhaustParticleCount; i++) {
+      const phase = ((now * (0.00015 + thrust * 0.00034) + i * 0.61803398875) % 1 + 1) % 1;
+      const spread = (0.018 + phase * 0.14) * (0.25 + thrust);
+      particleArray[i * 3] = 1.88 + phase * (0.35 + 3.7 * thrust);
+      particleArray[i * 3 + 1] = Math.sin(i * 12.9898 + now * 0.004) * spread;
+      particleArray[i * 3 + 2] = Math.cos(i * 7.233 + now * 0.0037) * spread;
+    }
+    exhaustParticleGeometry.attributes.position.needsUpdate = true;
+    exhaustParticles.visible = vfxEnabled && thrust > .10;
+    exhaustParticleMaterial.opacity = .70 * thrust;
 
     forceArrow.position.set(pivotX, 0, 0);
     forceArrow.setDirection(exhaustDirection.clone().negate());
     forceArrow.setLength(.42 + 1.55 * thrust, .22, .11);
-    forceArrow.visible = thrust > .01;
+    forceArrow.visible = (!$('forceToggle') || $('forceToggle').checked) && thrust > .01;
 
     // Screen-space labels are positioned over the scene, not rendered in 3D.
     const vw = view.clientWidth, vh = view.clientHeight;
@@ -958,11 +1172,31 @@
       telemetry.pit.textContent = `${fmt(state.p)}° / ${fmt(cmd.p)}°`;
       telemetry.yaw.textContent = `${fmt(state.y)}° / ${fmt(cmd.y)}°`;
       telemetry.def.textContent = `${Math.hypot(state.p,state.y).toFixed(1)}° / ${LIM}°`;
-      telemetry.fwd.textContent = `${(F*exhaustDirection.x).toFixed(1)} kN`;
+      // Force components follow the reaction-force arrow (opposite the exhaust).
+      telemetry.fwd.textContent = `${(-F*exhaustDirection.x).toFixed(1)} kN`;
       telemetry.ver.textContent = `${(-F*exhaustDirection.y).toFixed(1)} kN`;
-      telemetry.lat.textContent = `${(F*exhaustDirection.z).toFixed(1)} kN`;
+      telemetry.lat.textContent = `${(-F*exhaustDirection.z).toFixed(1)} kN`;
       telemetry.sts.textContent = paused ? 'PAUSED' : (rateLimited ? 'RATE LIMITED' : (moving ? 'MOVING' : 'HOLDING'));
       actuatorMeshes.forEach((a, i) => { telemetry['a'+i].textContent = `${fmt(a.extension*1000,0)} mm`; });
+      telemetry.n2.textContent = `${(61 + 39 * Math.sqrt(thrust)).toFixed(1)} % N2 (est.)`;
+      telemetry.egt.textContent = `${egtC.toFixed(0)} °C`;
+      telemetry.fuel.textContent = `${(0.45 + 4.0 * Math.pow(thrust, 1.7)).toFixed(2)} kg/s (est.)`;
+      telemetry.area.textContent = `${(Math.PI * Math.pow(0.55 * (1 - 0.055 * thrust), 2) * 10000).toFixed(0)} cm²`;
+      telemetry.exh.textContent = `${(180 + 720 * Math.sqrt(thrust)).toFixed(0)} m/s (est.)`;
+      telemetry.tor.textContent = `${(F * 0.65 * Math.sin(Math.hypot(state.p, state.y) * D)).toFixed(1)} kN·m (est.)`;
+      history.push({ thrust, egt: egtC });
+      if (history.length > 120) history.shift();
+      drawHistory();
+      const statusEl = $('simStatus');
+      if (statusEl) {
+        const statusText = paused ? 'PAUSED' : (rateLimited ? 'ACTUATOR RATE-LIMITED' : 'SIMULATION RUNNING');
+        let dot = statusEl.querySelector('.status-dot');
+        if (!dot) { dot = document.createElement('span'); dot.className = 'status-dot'; }
+        statusEl.textContent = '';
+        statusEl.appendChild(dot);
+        statusEl.appendChild(document.createTextNode(statusText));
+        statusEl.classList.toggle('is-warning', rateLimited || paused);
+      }
       $('thrV').textContent = `${(throttleCmd*100).toFixed(0)} %`;
       $('pitV').textContent = `${fmt(cmd.p)}°`;
       $('yawV').textContent = `${fmt(cmd.y)}°`;
@@ -975,10 +1209,18 @@
   // ---------------- Animation loop ----------------
   let lastFrame = performance.now();
   let accumulator = 0;
+  let fpsFrameCount = 0;
+  let fpsWindowStart = lastFrame;
   function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min((now - lastFrame) / 1000, .1);
     lastFrame = now;
+    fpsFrameCount++;
+    if (now - fpsWindowStart >= 600) {
+      if ($('fpsTag')) $('fpsTag').textContent = `${Math.round(fpsFrameCount * 1000 / (now - fpsWindowStart))} FPS · ${renderer.capabilities.isWebGL2 ? 'WEBGL2' : 'WEBGL'}`;
+      fpsFrameCount = 0;
+      fpsWindowStart = now;
+    }
     if (!paused) {
       accumulator += dt;
       let safety = 0;
@@ -988,6 +1230,7 @@
     }
     updateCamera(dt);
     updatePose(now);
+    updateAudio(now);
     drawPad();
     renderer.render(scene, camera);
   }
