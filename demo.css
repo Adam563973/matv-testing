@@ -185,3 +185,52 @@ button { color: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+/* Flight-test and selectable nozzle architecture additions */
+.wide-select {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid #2b435a;
+  border-radius: 3px;
+  background: #0a1725;
+  color: #dceafa;
+  font-size: 10px;
+  outline: none;
+}
+.wide-select:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.section-note { margin: 8px 0 0; color: #718aa3; font-size: 9px; line-height: 1.6; }
+.control-label output { font-variant-numeric: tabular-nums; }
+input:disabled { cursor: not-allowed; opacity: .42; }
+.flight-controls { background: linear-gradient(120deg, rgba(19, 52, 76, .18), transparent 65%); }
+.flight-action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 15px 0; }
+.flight-action-row .btn { min-height: 37px; }
+#flightTele { width: 100%; margin-top: 12px; border-collapse: collapse; font: 10px/1.3 var(--mono); font-variant-numeric: tabular-nums; }
+#flightTele td { padding: 7px 9px; border-bottom: 1px solid rgba(111,151,190,.12); }
+#flightTele tr:last-child td { border-bottom: 0; }
+#flightTele td:first-child { width: 55%; color: #7994ad; }
+#flightTele td:last-child { text-align: right; color: #aeeaff; white-space: nowrap; }
+.flight-hud { display: none; position: absolute; z-index: 4; left: 24px; top: 126px; width: min(320px, calc(100% - 48px)); padding: 12px 14px; border: 1px solid rgba(209,232,255,.32); background: rgba(5,17,31,.55); backdrop-filter: blur(10px); box-shadow: 0 8px 32px rgba(4,18,32,.16); pointer-events: none; }
+.hud-label { margin-bottom: 10px; color: #cde8ff; font: 8px/1.3 var(--mono); letter-spacing: .14em; }
+.hud-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px 18px; }
+.hud-grid > div { display: flex; flex-direction: column; gap: 4px; }
+.hud-grid span { color: #93b5d2; font: 8px var(--mono); letter-spacing: .08em; }
+.hud-grid b { color: #fff; font: 16px/1.1 var(--mono); font-weight: 500; text-shadow: 0 0 12px rgba(95,185,255,.25); }
+#sceneMode { border-color: rgba(64,213,255,.38); }
+#view.flight-scene .view-title span { color: #9be4ff; }
+#view.flight-scene .orientation-tag { display: none; }
+#view.flight-scene #camtag { color: #e5f5ff; }
+#view.flight-scene .scene-vignette { background: linear-gradient(180deg, rgba(5,16,30,.32), transparent 30%, transparent 70%, rgba(5,12,22,.26)); }
+
+@media (max-width: 1060px) {
+  .flight-hud { left: 17px; top: 116px; }
+}
+@media (max-width: 760px) {
+  .flight-hud { left: 12px; top: 93px; width: min(260px, calc(100% - 24px)); padding: 9px 10px; }
+  .hud-label { margin-bottom: 7px; font-size: 7px; }
+  .hud-grid { gap: 8px 12px; }
+  .hud-grid span { font-size: 7px; }
+  .hud-grid b { font-size: 13px; }
+  .flight-action-row { gap: 6px; }
+}
