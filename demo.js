@@ -99,9 +99,10 @@
   let renderer;
   try {
     renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      // Conservative defaults are more reliable on integrated/mobile GPUs.
+      antialias: false,
       alpha: false,
-      powerPreference: 'high-performance',
+      powerPreference: 'low-power',
       stencil: false,
       depth: true
     });
@@ -130,6 +131,7 @@
       fallbackCanvas.width = Math.max(1, Math.floor(w * dpr));
       fallbackCanvas.height = Math.max(1, Math.floor(h * dpr));
       fallbackCanvas.style.display = 'block';
+      if (renderer && renderer.domElement) renderer.domElement.style.visibility = 'hidden';
       const c = fallbackContext;
       c.setTransform(dpr,0,0,dpr,0,0);
       const sky = c.createLinearGradient(0,0,0,h);
@@ -170,13 +172,14 @@
   }
   function hideGraphicsFallback() {
     if (fallbackCanvas) fallbackCanvas.style.display='none';
+    if (renderer && renderer.domElement) renderer.domElement.style.visibility = 'visible';
     const labelsEl=$('labels'); if(labelsEl) labelsEl.style.visibility='';
   }
 
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(1);
   renderer.setSize(Math.max(view.clientWidth, 1), Math.max(view.clientHeight, 1), false);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.enabled = false;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.18;
   renderer.outputEncoding = THREE.sRGBEncoding;
@@ -1408,9 +1411,10 @@
     const w = Math.max(view.clientWidth, 1);
     const h = Math.max(view.clientHeight, 1);
     const mode = $('quality') ? $('quality').value : 'balanced';
-    // Cap DPR to avoid the multi-million-pixel buffers that can destabilise
-    // integrated/mobile GPUs. High mode remains intentionally conservative.
-    const maxDpr = mode === 'high' ? 1.5 : (mode === 'performance' ? 1 : 1.25);
+    // Hard-cap framebuffer size. Performance mode renders below CSS resolution;
+    // high mode increases pixel density only slightly. Shadows remain disabled
+    // across all presets to avoid costly shader recompilation on weak GPUs.
+    const maxDpr = mode === 'high' ? 1.15 : (mode === 'balanced' ? 1.0 : 0.85);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
@@ -1423,13 +1427,9 @@
   function applyQuality() {
     const mode = $('quality') ? $('quality').value : 'balanced';
     try {
-      const mapSize = mode === 'high' ? 1536 : (mode === 'performance' ? 512 : 768);
-      renderer.shadowMap.enabled = mode !== 'performance';
-      renderer.shadowMap.type = mode === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-      if (key && key.shadow && key.shadow.mapSize) {
-        key.shadow.mapSize.set(mapSize, mapSize);
-        key.shadow.needsUpdate = true;
-      }
+      // Quality changes only resize the drawing buffer. Do not switch shadow
+      // modes or shader defines while the renderer is alive.
+      renderer.shadowMap.enabled = false;
       resize();
       runtimeFaults.delete('render quality');
     } catch (error) {
@@ -1555,17 +1555,9 @@
       statusEl.classList.toggle('is-warning', paused);
     }
   }
-  bindSafeChange('auto', 'auto demonstration', () => {
-    // Enabling the demo should always start motion, even if the sim was paused.
-    if ($('auto').checked) {
-      paused = false;
-      accumulator = 0;
-      lastFrame = performance.now();
-      if ($('bPause')) $('bPause').textContent = 'Pause';
-      clearRuntimeNotice();
-    }
-    updateAutoStatus();
-  });
+  // Checkbox controls are intentionally not wired to scene-changing callbacks.
+  // The animation loop polls their state, so toggling them cannot rebuild the
+  // renderer, change the canvas, or synchronously mutate the Three.js scene.
   $('diff').addEventListener('input', () => { $('diffV').textContent = `${fmt(Number($('diff').value),1)}°`; tryHaptic(6); });
   $('flightSpeed').addEventListener('input', () => { flight.speed = Number($('flightSpeed').value); $('speedV').textContent = `${flight.speed.toFixed(0)} m/s`; });
   $('flightAlt').addEventListener('input', () => { flight.altitude = Number($('flightAlt').value); $('altV').textContent = `${flight.altitude.toFixed(0)} m`; });
@@ -1596,9 +1588,16 @@
     twinActuatorMeshes.forEach(a=>['body','rod','collar','eyeA','eyeB'].forEach(k=>a[k].visible=bench&&mode==='twin'));
     const isTwin = mode === 'twin';
     $('thr').setAttribute('aria-label',isTwin?'Throttle command shared by two illustrative engines':'Throttle command');
-    setSceneMode();
+    setSceneMode(false);
   }
-  function setSceneMode() {
+  function updateForceVisibility() {
+    const activeBench = $('sceneMode').value === 'bench';
+    const twinMode = $('nozzleMode').value === 'twin';
+    const enabled = !!$('forceToggle').checked;
+    forceArrow.visible = activeBench && enabled;
+    twinForceArrow.visible = activeBench && twinMode && enabled;
+  }
+  function setSceneMode(resetCamera = true) {
     const flightMode = $('sceneMode').value === 'flight';
     const mode = $('nozzleMode').value;
     presets = flightMode ? flightPresets : benchPresets;
@@ -1608,8 +1607,7 @@
     nozzle2D.visible = activeBench && mode === '2d';
     twinEngine.visible = activeBench && mode === 'twin';
     twinNozzle.visible = activeBench && mode === 'twin';
-    forceArrow.visible = activeBench && !!$('forceToggle').checked;
-    twinForceArrow.visible = activeBench && mode === 'twin' && !!$('forceToggle').checked;
+    updateForceVisibility();
     actuatorMeshes.forEach(a=>['body','rod','collar','eyeA','eyeB'].forEach(k=>a[k].visible=activeBench));
     twinActuatorMeshes.forEach(a=>['body','rod','collar','eyeA','eyeB'].forEach(k=>a[k].visible=activeBench&&mode==='twin'));
     aircraft.visible = flightMode;
@@ -1619,7 +1617,8 @@
     $('hint').innerHTML = flightMode
       ? 'DRAG TO ORBIT <span>·</span> WHEEL TO ZOOM <span>·</span> E TO CHANGE CAMERA <span>·</span> FLIGHT MODEL: ILLUSTRATIVE'
       : 'DRAG TO ORBIT <span>·</span> WHEEL TO ZOOM <span>·</span> E TO CHANGE CAMERA <span>·</span> SPACE TO PAUSE';
-    setPreset(0);
+    if (resetCamera) setPreset(0);
+    else if (presetIndex >= presets.length) setPreset(0);
   }
   function applyAircraftProfile() {
     const chosen = $('aircraftProfile').value;
@@ -1628,7 +1627,10 @@
   bindSafeChange('nozzleMode', 'nozzle kinematics', setNozzleMode);
   bindSafeChange('sceneMode', 'simulation scene', setSceneMode);
   bindSafeChange('aircraftProfile', 'aircraft profile', applyAircraftProfile);
-  bindSafeChange('forceToggle', 'force vector visibility', setSceneMode);
+
+  // All checkbox settings are state-only. Their effects are consumed during
+  // the guarded animation frame below. This avoids click/change handlers
+  // touching WebGL resources (a former source of fragile toggle behaviour).
   $('bCobra').addEventListener('click',()=>{
     $('sceneMode').value='flight'; setSceneMode();
     cobraDemo.savedThrottle=throttleCmd; cobraDemo.active=true; cobraDemo.time=0;
@@ -1749,6 +1751,7 @@
   }
 
   function updatePose(now) {
+    const vfxEnabled = !$('vfx') || $('vfx').checked;
     // Slowly drift the translucent cloud layer; leave the sky gradient fixed.
     cloudTexture.offset.x = (now * 0.00000010) % 1;
     const qYaw = new THREE.Quaternion().setFromAxisAngle(V(0,1,0), -state.y * D);
@@ -1836,7 +1839,6 @@
 
     const exhaustDirection = V(1,0,0).applyQuaternion(nozzle.quaternion);
     const active = thrust > .018;
-    const vfxEnabled = !$('vfx') || $('vfx').checked;
     plume.visible = active && vfxEnabled;
     if (twinPlume) twinPlume.visible = twinOn && active && vfxEnabled;
     if (twinExhaustLight) twinExhaustLight.intensity = (twinOn && vfxEnabled) ? 10 * thrust : 0;
@@ -1849,19 +1851,24 @@
     plumeInner.material.opacity = vfxEnabled ? .54 * thrust : 0;
     exhaustLight.intensity = vfxEnabled ? 10 * thrust : 0;
     hotCore.material.color.setRGB(.12 + .65*thrust, .025 + .10*thrust, .012);
-    shockDiamonds.forEach((ring,i) => {
-      const pulse = 0.78 + 0.22*Math.sin(now*0.008 - i*0.75);
-      ring.material.opacity = vfxEnabled && thrust>0.22 ? (0.09+0.27*thrust)*pulse : 0;
-      ring.position.x = 2.02 + i*(0.39+0.08*thrust);
-      ring.scale.setScalar((0.52+i*0.055)*(0.82+0.32*thrust)*pulse);
-      ring.rotation.z = Math.sin(now*0.003+i)*0.018;
-      const twinRing = twinShockDiamonds[i];
-      if (twinRing) {
-        twinRing.position.copy(ring.position);
-        twinRing.scale.copy(ring.scale);
-        twinRing.rotation.copy(ring.rotation);
-      }
-    });
+    if (vfxEnabled) {
+      shockDiamonds.forEach((ring,i) => {
+        const pulse = 0.78 + 0.22*Math.sin(now*0.008 - i*0.75);
+        ring.material.opacity = thrust>0.22 ? (0.09+0.27*thrust)*pulse : 0;
+        ring.position.x = 2.02 + i*(0.39+0.08*thrust);
+        ring.scale.setScalar((0.52+i*0.055)*(0.82+0.32*thrust)*pulse);
+        ring.rotation.z = Math.sin(now*0.003+i)*0.018;
+        const twinRing = twinShockDiamonds[i];
+        if (twinRing) {
+          twinRing.position.copy(ring.position);
+          twinRing.scale.copy(ring.scale);
+          twinRing.rotation.copy(ring.rotation);
+        }
+      });
+    } else {
+      shockDiamonds.forEach(ring => { ring.material.opacity = 0; });
+      twinShockDiamonds.forEach(ring => { if (ring) ring.material.opacity = 0; });
+    }
     const dualFlightExhaust = twinOn || $('aircraftProfile').value === 'f22';
     flightExhausts.forEach(exhaust => {
       const kindMatches = exhaust.kind === 'centre' ? !dualFlightExhaust : dualFlightExhaust;
@@ -1877,33 +1884,44 @@
         ring.rotation.copy(shockDiamonds[i].rotation);
       });
     });
-    const shimmerArray = shimmerGeometry.attributes.position.array;
-    for(let i=0;i<shimmerCount;i++) {
-      const phase=((now*0.00018+i*0.61803398875)%1+1)%1;
-      const spread=(0.08+phase*0.27)*(0.15+thrust);
-      shimmerArray[i*3]=1.9+phase*(1.0+3.3*thrust);
-      shimmerArray[i*3+1]=Math.sin(i*9.81+now*0.009)*spread;
-      shimmerArray[i*3+2]=Math.cos(i*6.27+now*0.008)*spread;
-    }
-    shimmerGeometry.attributes.position.needsUpdate = true;
-    shimmerMaterial.opacity = vfxEnabled ? 0.23*thrust : 0;
-    heatShimmer.visible = vfxEnabled && thrust>.18;
-    nozzle2DGlow.material.opacity = vfxEnabled ? .19*thrust : 0;
-    nozzle2DGlow.scale.set(0.6+2.0*thrust,0.48+0.25*thrust,0.48+0.25*thrust);
+    if (vfxEnabled) {
+      const shimmerArray = shimmerGeometry.attributes.position.array;
+      for(let i=0;i<shimmerCount;i++) {
+        const phase=((now*0.00018+i*0.61803398875)%1+1)%1;
+        const spread=(0.08+phase*0.27)*(0.15+thrust);
+        shimmerArray[i*3]=1.9+phase*(1.0+3.3*thrust);
+        shimmerArray[i*3+1]=Math.sin(i*9.81+now*0.009)*spread;
+        shimmerArray[i*3+2]=Math.cos(i*6.27+now*0.008)*spread;
+      }
+      shimmerGeometry.attributes.position.needsUpdate = true;
+      shimmerMaterial.opacity = 0.23*thrust;
+      heatShimmer.visible = thrust>.18;
+      nozzle2DGlow.material.opacity = .19*thrust;
+      nozzle2DGlow.scale.set(0.6+2.0*thrust,0.48+0.25*thrust,0.48+0.25*thrust);
 
-    // A few glowing tracer particles add depth to the exhaust plume without a
-    // post-processing dependency. Their cloud follows the vectored nozzle.
-    const particleArray = exhaustParticleGeometry.attributes.position.array;
-    for (let i = 0; i < exhaustParticleCount; i++) {
-      const phase = ((now * (0.00015 + thrust * 0.00034) + i * 0.61803398875) % 1 + 1) % 1;
-      const spread = (0.018 + phase * 0.14) * (0.25 + thrust);
-      particleArray[i * 3] = 1.88 + phase * (0.35 + 3.7 * thrust);
-      particleArray[i * 3 + 1] = Math.sin(i * 12.9898 + now * 0.004) * spread;
-      particleArray[i * 3 + 2] = Math.cos(i * 7.233 + now * 0.0037) * spread;
+      // A few glowing tracer particles add depth to the exhaust plume without a
+      // post-processing dependency. Their cloud follows the vectored nozzle.
+      const particleArray = exhaustParticleGeometry.attributes.position.array;
+      for (let i = 0; i < exhaustParticleCount; i++) {
+        const phase = ((now * (0.00015 + thrust * 0.00034) + i * 0.61803398875) % 1 + 1) % 1;
+        const spread = (0.018 + phase * 0.14) * (0.25 + thrust);
+        particleArray[i * 3] = 1.88 + phase * (0.35 + 3.7 * thrust);
+        particleArray[i * 3 + 1] = Math.sin(i * 12.9898 + now * 0.004) * spread;
+        particleArray[i * 3 + 2] = Math.cos(i * 7.233 + now * 0.0037) * spread;
+      }
+      exhaustParticleGeometry.attributes.position.needsUpdate = true;
+      exhaustParticles.visible = thrust > .10;
+      exhaustParticleMaterial.opacity = .70 * thrust;
+    } else {
+      shimmerMaterial.opacity = 0;
+      heatShimmer.visible = false;
+      exhaustParticles.visible = false;
+      shimmerGeometry.attributes.position.needsUpdate = false;
+      exhaustParticleGeometry.attributes.position.needsUpdate = false;
+      nozzle2DGlow.material.opacity = 0;
+      shockDiamonds.forEach(ring => { ring.material.opacity = 0; });
+      twinShockDiamonds.forEach(ring => { if (ring) ring.material.opacity = 0; });
     }
-    exhaustParticleGeometry.attributes.position.needsUpdate = true;
-    exhaustParticles.visible = vfxEnabled && thrust > .10;
-    exhaustParticleMaterial.opacity = .70 * thrust;
 
     forceArrow.position.set(pivotX, 0, twinOn ? -0.84 : 0);
     forceArrow.setDirection(exhaustDirection.clone().negate());
@@ -2034,6 +2052,9 @@
   // rendering or kill the next requestAnimationFrame callback.
   let lastFrame = performance.now();
   let accumulator = 0;
+  let lastAutoWasChecked = !!$('auto').checked;
+  let lastRenderAt = 0;
+  const renderIntervalMs = 1000 / 45;
   let fpsFrameCount = 0;
   let fpsWindowStart = lastFrame;
   document.addEventListener('visibilitychange', () => {
@@ -2050,12 +2071,41 @@
     try { fn(); return true; }
     catch (error) { reportRuntimeFault(name, error, pausePhysics); return false; }
   }
+  function checkGraphicsContext() {
+    if (contextLost || !renderer || typeof renderer.getContext !== 'function') return;
+    const gl = renderer.getContext();
+    if (gl && typeof gl.isContextLost === 'function' && gl.isContextLost()) {
+      contextLost = true;
+      paused = true;
+      if ($('bPause')) $('bPause').textContent = 'Resume';
+      showRuntimeNotice('The graphics context is lost. The simulator is paused and showing a fallback view.', 'warning');
+      drawGraphicsFallback('Graphics context lost; waiting for recovery');
+    }
+  }
+  function syncCheckboxState() {
+    // Only handle boolean state transitions here; never rebuild geometry or
+    // change rendering quality from a checkbox event.
+    const autoOn = !!$('auto').checked;
+    if (autoOn && !lastAutoWasChecked) {
+      paused = false;
+      accumulator = 0;
+      if ($('bPause')) $('bPause').textContent = 'Pause';
+    }
+    if (autoOn !== lastAutoWasChecked) updateAutoStatus();
+    lastAutoWasChecked = autoOn;
+    if (!$('gamepadToggle').checked && $('gamepadTag').textContent !== 'GAMEPAD: OFF') {
+      lastGamepadId = ''; lastGamepadP = null; lastGamepadY = null;
+      $('gamepadTag').textContent = 'GAMEPAD: OFF';
+    }
+  }
   function frame(now) {
     requestAnimationFrame(frame);
     const dt = clamp((now - lastFrame) / 1000, 0, 0.05);
     lastFrame = now;
-    fpsFrameCount++;
+    const renderDue = now - lastRenderAt >= renderIntervalMs;
+    if (renderDue) { lastRenderAt = now; fpsFrameCount++; }
 
+    safeFrameStage('checkbox state sync', syncCheckboxState, false);
     safeFrameStage('controller polling', pollGamepad, false);
     if (now - fpsWindowStart >= 600) {
       safeFrameStage('performance display', () => {
@@ -2078,13 +2128,15 @@
     }
 
     safeFrameStage('camera update', () => updateCamera(dt), false);
-    safeFrameStage('scene effects update', () => updatePose(now), false);
+    if (renderDue) safeFrameStage('scene effects update', () => updatePose(now), false);
     safeFrameStage('audio update', () => updateAudio(now), false);
     safeFrameStage('control pad display', drawPad, false);
 
+    // Poll the context as some browser/GPU combinations delay the loss event.
+    safeFrameStage('graphics context watchdog', checkGraphicsContext, false);
     // Keep trying after a GPU/render fault, but throttle retries to once per
     // second when broken. A 2D diagnostic remains visible if WebGL is unavailable.
-    if (!contextLost && (!renderBroken || now >= nextRenderRetryAt)) {
+    if (renderDue && !contextLost && (!renderBroken || now >= nextRenderRetryAt)) {
       const wasBroken = renderBroken;
       const renderOK = safeFrameStage('3D render', () => renderer.render(scene, camera), false);
       if (renderOK) {
@@ -2127,7 +2179,7 @@
 
   $('camtag').textContent = 'INITIALISING SIMULATION…';
   setNozzleMode(); applyAircraftProfile(); setSceneMode();
-  console.info('MATV visualisation initialised. Renderer:', renderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1', 'Three.js:', THREE.REVISION);
+  console.info('MATV v3.3 toggle-safe visualisation initialised. Renderer:', renderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1', 'Three.js:', THREE.REVISION);
   clearRuntimeNotice();
   updateAutoStatus();
   requestAnimationFrame(frame);
