@@ -6,6 +6,8 @@
   const runtimeFaults = new Set();
   let contextLost = false;
   let renderBroken = false;
+  let renderFallbackTried = false;
+  let nextRenderRetryAt = 0;
   let paused = false;
   function showRuntimeNotice(message, severity = 'error') {
     const viewEl = document.getElementById('view');
@@ -79,6 +81,20 @@
   const fmt = (v, d = 1) => (v >= 0 ? '+' : '') + v.toFixed(d);
   const view = $('view');
 
+  // Event-handler boundaries: a bad setting callback must never stop animation.
+  function runSafeControl(name, callback, event) {
+    try { return callback(event); }
+    catch (error) {
+      reportRuntimeFault('control ' + name, error, false);
+      return undefined;
+    }
+  }
+  function bindSafeChange(id, name, callback) {
+    const element = $(id);
+    if (!element) return;
+    element.addEventListener('change', event => runSafeControl(name, callback, event));
+  }
+
   // ---------------- Renderer ----------------
   let renderer;
   try {
@@ -94,6 +110,69 @@
     view.innerHTML = '<p style="padding:20px;color:#fff">WebGL is unavailable in this browser or device.</p>';
     return;
   }
+  let fallbackCanvas = null;
+  let fallbackContext = null;
+  function drawGraphicsFallback(message) {
+    try {
+      if (!fallbackCanvas) {
+        fallbackCanvas = document.createElement('canvas');
+        fallbackCanvas.id = 'matv-2d-fallback';
+        fallbackCanvas.style.cssText = 'position:absolute;inset:0;z-index:2;width:100%;height:100%;display:none;pointer-events:none;';
+        view.appendChild(fallbackCanvas);
+        fallbackContext = fallbackCanvas.getContext('2d');
+      }
+      if (!fallbackContext) {
+        view.style.background = 'linear-gradient(180deg,#1a5bb7,#9ed3f4 68%,#dcedf9)';
+        return;
+      }
+      const w = Math.max(view.clientWidth, 1), h = Math.max(view.clientHeight, 1);
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+      fallbackCanvas.width = Math.max(1, Math.floor(w * dpr));
+      fallbackCanvas.height = Math.max(1, Math.floor(h * dpr));
+      fallbackCanvas.style.display = 'block';
+      const c = fallbackContext;
+      c.setTransform(dpr,0,0,dpr,0,0);
+      const sky = c.createLinearGradient(0,0,0,h);
+      sky.addColorStop(0,'#1555ac'); sky.addColorStop(.55,'#6fb4ec'); sky.addColorStop(1,'#e0f1fb');
+      c.fillStyle=sky; c.fillRect(0,0,w,h);
+      c.fillStyle='rgba(255,255,255,.25)';
+      for(let i=0;i<8;i++){
+        const x=((i*173+71)%(Math.max(w,1))), y=h*(.18+((i*37)%43)/100), rx=Math.max(28,w*.045), ry=Math.max(10,h*.018);
+        c.beginPath(); c.ellipse(x,y,rx,ry,0,0,Math.PI*2); c.fill();
+        c.beginPath(); c.ellipse(x+rx*.48,y-ry*.35,rx*.62,ry*.8,0,0,Math.PI*2); c.fill();
+      }
+      const cx=w*.55, cy=h*.56, r=Math.min(w,h)*.12;
+      c.save(); c.translate(cx,cy);
+      c.strokeStyle='rgba(12,39,68,.85)'; c.lineWidth=2;
+      c.beginPath(); c.ellipse(0,0,r*1.05,r*.84,0,0,Math.PI*2); c.stroke();
+      c.strokeStyle='rgba(26,68,105,.95)'; c.lineWidth=1.5;
+      for(let i=0;i<16;i++){
+        const a=i*Math.PI/8;
+        c.beginPath(); c.moveTo(Math.cos(a)*r*.36,Math.sin(a)*r*.30); c.lineTo(Math.cos(a)*r*.89,Math.sin(a)*r*.68); c.stroke();
+      }
+      c.fillStyle='rgba(7,27,48,.9)'; c.beginPath(); c.ellipse(0,0,r*.35,r*.28,0,0,Math.PI*2); c.fill();
+      c.strokeStyle='rgba(50,215,255,.9)'; c.lineWidth=3; c.beginPath(); c.ellipse(0,0,r*1.14,r*.92,0,0,Math.PI*2); c.stroke();
+      c.restore();
+      c.fillStyle='rgba(5,20,35,.88)'; c.fillRect(16,Math.max(115,h*.19),Math.min(w-32,380),68);
+      c.strokeStyle='#ffb36b'; c.lineWidth=1; c.strokeRect(16,Math.max(115,h*.19),Math.min(w-32,380),68);
+      c.fillStyle='#fff'; c.font='600 12px ui-monospace,monospace'; c.fillText('3D RENDER UNAVAILABLE',28,Math.max(140,h*.19+24));
+      c.fillStyle='#ffdfbf'; c.font='11px ui-monospace,monospace';
+      const shortMessage=String(message||'Using diagnostic display').slice(0,56);
+      c.fillText(shortMessage,28,Math.max(163,h*.19+47));
+      c.fillStyle='rgba(5,20,35,.84)'; c.fillRect(16,h-45,Math.min(w-32,500),28);
+      c.fillStyle='#e8f6ff'; c.font='10px ui-monospace,monospace';
+      c.fillText('TRY RENDER: PERFORMANCE · RELOAD AFTER UPDATING THE BROWSER',25,h-27);
+      const labelsEl=$('labels'); if(labelsEl) labelsEl.style.visibility='hidden';
+    } catch (error) {
+      console.warn('MATV 2D fallback could not draw:',error);
+      view.style.background = 'linear-gradient(180deg,#1a5bb7,#9ed3f4 68%,#dcedf9)';
+    }
+  }
+  function hideGraphicsFallback() {
+    if (fallbackCanvas) fallbackCanvas.style.display='none';
+    const labelsEl=$('labels'); if(labelsEl) labelsEl.style.visibility='';
+  }
+
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(Math.max(view.clientWidth, 1), Math.max(view.clientHeight, 1), false);
   renderer.shadowMap.enabled = true;
@@ -116,15 +195,18 @@
     contextLost = true;
     if (typeof paused !== 'undefined') paused = true;
     showRuntimeNotice('The browser lost the 3D graphics context. The simulation has paused while the browser attempts recovery.', 'warning');
+    drawGraphicsFallback('Graphics context lost; waiting for recovery');
   });
   renderer.domElement.addEventListener('webglcontextrestored', () => {
     contextLost = false;
     renderBroken = false;
     renderFallbackTried = false;
+    nextRenderRetryAt = 0;
     runtimeFaults.delete('3D render');
     try {
       if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
       resize();
+      hideGraphicsFallback();
       clearRuntimeNotice();
       showRuntimeNotice('3D graphics recovered. Press Resume if the simulation remains paused.', 'warning');
     } catch (error) {
@@ -1359,7 +1441,7 @@
       reportRuntimeFault('render quality', error, false);
     }
   }
-  if ($('quality')) $('quality').addEventListener('change', applyQuality);
+  bindSafeChange('quality', 'render quality', applyQuality);
   applyQuality();
 
   // ---------------- Input: orbit, zoom, optional nozzle pick-drag ----------------
@@ -1473,7 +1555,7 @@
       statusEl.classList.toggle('is-warning', paused);
     }
   }
-  $('auto').addEventListener('change', () => {
+  bindSafeChange('auto', 'auto demonstration', () => {
     // Enabling the demo should always start motion, even if the sim was paused.
     if ($('auto').checked) {
       paused = false;
@@ -1499,9 +1581,6 @@
   }
   if ($('audioBtn')) $('audioBtn').addEventListener('click', toggleAudio);
   if ($('bCamera')) $('bCamera').addEventListener('click', () => setPreset(presetIndex + 1));
-  if ($('forceToggle')) $('forceToggle').addEventListener('change', () => {
-    forceArrow.visible = $('forceToggle').checked && thrust > 0.01;
-  });
   function setNozzleMode() {
     const mode = $('nozzleMode').value;
     $('yaw').disabled = mode === '2d';
@@ -1546,10 +1625,10 @@
     const chosen = $('aircraftProfile').value;
     Object.keys(variants).forEach(key=>variants[key].visible=key===chosen);
   }
-  $('nozzleMode').addEventListener('change',setNozzleMode);
-  $('sceneMode').addEventListener('change',setSceneMode);
-  $('aircraftProfile').addEventListener('change',applyAircraftProfile);
-  $('forceToggle').addEventListener('change',setSceneMode);
+  bindSafeChange('nozzleMode', 'nozzle kinematics', setNozzleMode);
+  bindSafeChange('sceneMode', 'simulation scene', setSceneMode);
+  bindSafeChange('aircraftProfile', 'aircraft profile', applyAircraftProfile);
+  bindSafeChange('forceToggle', 'force vector visibility', setSceneMode);
   $('bCobra').addEventListener('click',()=>{
     $('sceneMode').value='flight'; setSceneMode();
     cobraDemo.savedThrottle=throttleCmd; cobraDemo.active=true; cobraDemo.time=0;
@@ -1577,6 +1656,9 @@
     $('auto').checked = false; $('grab').checked = false;
     runtimeFaults.clear();
     clearRuntimeNotice();
+    renderFallbackTried = false;
+    nextRenderRetryAt = 0;
+    if (!contextLost) { renderBroken = false; hideGraphicsFallback(); }
     accumulator = 0;
     lastFrame = performance.now();
     setCommand(0, 0);
@@ -1954,7 +2036,16 @@
   let accumulator = 0;
   let fpsFrameCount = 0;
   let fpsWindowStart = lastFrame;
-  let renderFallbackTried = false;
+  document.addEventListener('visibilitychange', () => {
+    // Avoid a large accumulated physics step after the tab was in the background.
+    lastFrame = performance.now();
+    accumulator = 0;
+    if (document.hidden && audioContext && audioContext.state === 'running') {
+      try { audioContext.suspend(); } catch (_) { /* optional audio feature */ }
+    } else if (!document.hidden && audioEnabled && audioContext && audioContext.state === 'suspended') {
+      try { audioContext.resume().catch(() => {}); } catch (_) { /* optional audio feature */ }
+    }
+  });
   function safeFrameStage(name, fn, pausePhysics = false) {
     try { fn(); return true; }
     catch (error) { reportRuntimeFault(name, error, pausePhysics); return false; }
@@ -1991,20 +2082,44 @@
     safeFrameStage('audio update', () => updateAudio(now), false);
     safeFrameStage('control pad display', drawPad, false);
 
-    if (!contextLost && !renderBroken) {
+    // Keep trying after a GPU/render fault, but throttle retries to once per
+    // second when broken. A 2D diagnostic remains visible if WebGL is unavailable.
+    if (!contextLost && (!renderBroken || now >= nextRenderRetryAt)) {
+      const wasBroken = renderBroken;
       const renderOK = safeFrameStage('3D render', () => renderer.render(scene, camera), false);
-      if (!renderOK && !renderFallbackTried) {
+      if (renderOK) {
+        if (wasBroken) {
+          renderBroken = false;
+          runtimeFaults.delete('3D render');
+          runtimeFaults.delete('3D render fallback');
+          clearRuntimeNotice();
+          showRuntimeNotice('3D rendering recovered. Press Resume if physics remains paused.', 'warning');
+        }
+        hideGraphicsFallback();
+      } else if (!renderFallbackTried) {
         renderFallbackTried = true;
         try {
           renderer.shadowMap.enabled = false;
           renderer.setPixelRatio(1);
           renderer.setSize(Math.max(view.clientWidth, 1), Math.max(view.clientHeight, 1), false);
           renderer.render(scene, camera);
-          showRuntimeNotice('Recovered using low-cost rendering. Render quality was reduced for stability.', 'warning');
+          renderBroken = false;
+          showRuntimeNotice('Rendering recovered with low-cost settings; shadows and resolution were reduced.', 'warning');
           runtimeFaults.delete('3D render');
+          hideGraphicsFallback();
         } catch (error) {
           renderBroken = true;
+          nextRenderRetryAt = now + 1000;
+          drawGraphicsFallback('WebGL render failed; simulation paused');
           reportRuntimeFault('3D render fallback', error, true);
+        }
+      } else {
+        renderBroken = true;
+        nextRenderRetryAt = now + 1000;
+        drawGraphicsFallback('WebGL render failed; trying again shortly');
+        if (!paused) {
+          paused = true;
+          if ($('bPause')) $('bPause').textContent = 'Resume';
         }
       }
     }
