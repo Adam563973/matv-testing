@@ -22,6 +22,16 @@
       <div class="view-status-row">
         <span id="simStatus" class="status-chip"><span class="status-dot"></span> INITIALISING</span>
         <span id="fpsTag" class="micro-chip">REAL-TIME VIEW</span>
+        <span id="gamepadTag" class="micro-chip">GAMEPAD: OFF</span>
+      </div>
+      <div id="flightHud" class="flight-hud" aria-live="off">
+        <div class="hud-label">FLIGHT TEST / ESTIMATED STATE</div>
+        <div class="hud-grid">
+          <div><span>AIRSPEED</span><b id="hudSpeed">220 m/s</b></div>
+          <div><span>MACH</span><b id="hudMach">0.65</b></div>
+          <div><span>ANGLE OF ATTACK</span><b id="hudAlpha">+4.0°</b></div>
+          <div><span>LOAD FACTOR</span><b id="hudG">1.0 G</b></div>
+        </div>
       </div>
       <div class="scene-vignette" aria-hidden="true"></div>
       <div id="labels" aria-hidden="true"></div>
@@ -39,13 +49,35 @@
           <div class="brand-overline">PROPULSION LABORATORY</div>
           <h1>MATV <span>SIMULATOR</span></h1>
         </div>
-        <div class="version-chip">v2.0</div>
+        <div class="version-chip">v3.0</div>
       </header>
 
       <div class="panel-subhead">
         <div><span class="live-pip"></span> DIGITAL TEST CELL</div>
         <label class="quality-picker" for="quality"><span>RENDER</span><select id="quality" aria-label="Rendering quality"><option value="performance">Performance</option><option value="balanced" selected>Balanced</option><option value="high">High</option></select></label>
       </div>
+
+      <section class="control-section mode-section">
+        <div class="section-title"><span>00</span> SIMULATION CONFIGURATION <span class="section-line"></span></div>
+        <label class="control-label" for="sceneMode"><span>Simulation scene</span></label>
+        <select id="sceneMode" class="wide-select" aria-label="Simulation scene">
+          <option value="bench" selected>Engine test bench</option>
+          <option value="flight">Free-flight dynamics</option>
+        </select>
+        <label class="control-label" for="nozzleMode"><span>Nozzle kinematics</span></label>
+        <select id="nozzleMode" class="wide-select" aria-label="Nozzle kinematics">
+          <option value="2d">2D pitch-only vectoring</option>
+          <option value="axisymmetric" selected>Axisymmetric 3D vectoring</option>
+          <option value="twin">Twin-engine differential vectoring</option>
+        </select>
+        <label class="control-label" for="aircraftProfile"><span>Aircraft silhouette</span></label>
+        <select id="aircraftProfile" class="wide-select" aria-label="Aircraft silhouette">
+          <option value="f16" selected>F-16 MATV style</option>
+          <option value="x31">X-31 demonstrator style</option>
+          <option value="f22">F-22 style test article</option>
+        </select>
+        <p class="section-note">Airframe silhouettes and flight coefficients are illustrative. Kinematics presets demonstrate different control concepts, not certified aircraft performance.</p>
+      </section>
 
       <section class="control-section">
         <div class="section-title"><span>01</span> ENGINE COMMANDS <span class="section-line"></span></div>
@@ -73,6 +105,9 @@
         <label class="control-label" for="yaw"><span>Yaw command</span><output id="yawV">+0.0°</output></label>
         <input class="range" type="range" id="yaw" min="-17" max="17" step="0.1" value="0">
         <div class="range-scale"><span>−17°</span><span>NEUTRAL</span><span>+17°</span></div>
+        <label class="control-label" for="diff"><span>Twin-engine differential pitch bias</span><output id="diffV">0.0°</output></label>
+        <input class="range" type="range" id="diff" min="-17" max="17" step="0.1" value="0" disabled>
+        <div class="range-scale"><span>LEFT ENGINE UP</span><span>SYMMETRIC</span><span>RIGHT ENGINE UP</span></div>
       </section>
 
       <section class="control-section">
@@ -88,7 +123,34 @@
           <label class="toggle-row" for="grab"><input type="checkbox" id="grab"><span class="toggle-ui"></span><span><b>Direct nozzle drag</b><small>Grab nozzle in 3D view</small></span></label>
           <label class="toggle-row" for="vfx"><input type="checkbox" id="vfx" checked><span class="toggle-ui"></span><span><b>Exhaust VFX</b><small>Glow and hot particles</small></span></label>
           <label class="toggle-row" for="forceToggle"><input type="checkbox" id="forceToggle" checked><span class="toggle-ui"></span><span><b>Force vector</b><small>Show reaction direction</small></span></label>
+          <label class="toggle-row" for="haptics"><input type="checkbox" id="haptics"><span class="toggle-ui"></span><span><b>Haptic feedback</b><small>Device or controller vibration where supported</small></span></label>
+          <label class="toggle-row" for="gamepadToggle"><input type="checkbox" id="gamepadToggle"><span class="toggle-ui"></span><span><b>Controller input</b><small>Left stick: nozzle pitch and yaw</small></span></label>
         </div>
+      </section>
+
+      <section class="control-section flight-controls" id="flightControls">
+        <div class="section-title"><span>04</span> FLIGHT DYNAMICS <span class="section-line"></span></div>
+        <p class="section-note">Switch to Free-flight dynamics to see the aircraft respond to thrust vectoring, aerodynamic control inputs, airspeed, and altitude.</p>
+        <label class="control-label" for="flightSpeed"><span>Starting / current airspeed</span><output id="speedV">220 m/s</output></label>
+        <input class="range" type="range" id="flightSpeed" min="90" max="360" step="1" value="220">
+        <div class="range-scale"><span>90 m/s</span><span>SUBSONIC TEST ENVELOPE</span><span>360 m/s</span></div>
+        <label class="control-label" for="flightAlt"><span>Initial altitude</span><output id="altV">4,200 m</output></label>
+        <input class="range" type="range" id="flightAlt" min="500" max="11000" step="100" value="4200">
+        <div class="range-scale"><span>500 m</span><span>PRESSURE MODEL</span><span>11,000 m</span></div>
+        <label class="control-label" for="elev"><span>Elevator / pitch control</span><output id="elevV">+0°</output></label>
+        <input class="range" type="range" id="elev" min="-25" max="25" step="1" value="0">
+        <label class="control-label" for="ail"><span>Aileron / roll control</span><output id="ailV">+0°</output></label>
+        <input class="range" type="range" id="ail" min="-25" max="25" step="1" value="0">
+        <label class="control-label" for="rud"><span>Rudder / yaw control</span><output id="rudV">+0°</output></label>
+        <input class="range" type="range" id="rud" min="-25" max="25" step="1" value="0">
+        <div class="check-grid">
+          <label class="toggle-row" for="flightAssist"><input type="checkbox" id="flightAssist" checked><span class="toggle-ui"></span><span><b>Stability damping</b><small>Rate damping / alpha stability</small></span></label>
+        </div>
+        <div class="flight-action-row">
+          <button type="button" class="btn btn-primary" id="bCobra">Cobra-style demo</button>
+          <button type="button" class="btn" id="bLevel">Recover / level</button>
+        </div>
+        <div class="telemetry-table-wrap"><table id="flightTele" aria-label="Flight dynamics telemetry"></table></div>
       </section>
 
       <div class="action-grid" aria-label="Simulation actions">
@@ -105,22 +167,22 @@
       </section>
 
       <section class="control-section telemetry-section">
-        <div class="section-title"><span>04</span> LIVE TELEMETRY <span class="section-line"></span></div>
+        <div class="section-title"><span>05</span> ENGINE TELEMETRY <span class="section-line"></span></div>
         <div class="telemetry-table-wrap"><table id="tele" aria-label="Live simulator telemetry"></table></div>
         <div class="telemetry-footnote">Values marked EST. are model estimates, not certified engine data.</div>
       </section>
 
       <section class="control-section chart-section">
-        <div class="section-title"><span>05</span> RESPONSE HISTORY <span class="section-line"></span></div>
+        <div class="section-title"><span>06</span> RESPONSE HISTORY <span class="section-line"></span></div>
         <div class="chart-legend"><span><i class="chart-line thrust-line"></i> THRUST FRACTION</span><span><i class="chart-line temp-line"></i> EGT (NORMALISED)</span></div>
         <canvas id="simChart" width="720" height="180" aria-label="Thrust and exhaust temperature response history"></canvas>
       </section>
 
       <details class="physics-notes">
         <summary>MODEL NOTES & LIMITATIONS</summary>
-        <p>The simulator integrates a fixed-step actuator model, a first-order asymmetric engine spool response, angle/rate saturation, estimated thrust components, thermal lag, and simplified nozzle area behaviour.</p>
-        <p>Audio is generated locally using Web Audio oscillators and filtered noise. It is an effect, not a recording. Visual reflections and glow approximate advanced rendering; no hardware ray tracing is used.</p>
-        <p>This is an educational visualisation. It is not an F-16 flight model, maintenance tool, engine performance map, or certified engineering simulation.</p>
+        <p>The bench integrates a fixed-step rate-limited actuator model, asymmetric engine spool response, nozzle saturation, thermal lag, and estimated thrust-vector components. The flight scene uses simplified dynamic pressure, drag, lift, control moments, inertia, atmospheric density, and rate damping.</p>
+        <p>Aircraft silhouettes and aerodynamic coefficients are purpose-built approximations, not source-authentic aircraft models. The Cobra-style sequence is an illustrative high-angle-of-attack response demonstration, not a validated Pugachev's Cobra flight model.</p>
+        <p>Audio is synthesized locally and spatialised with Web Audio where supported. Shock diamonds, exhaust bloom, heat shimmer and airflow are real-time visual approximations; there is no CFD, hardware ray tracing, or certified F-16 performance data.</p>
       </details>
       <footer class="panel-footer"><span>MATV LAB / INTERACTIVE MODEL</span><span>BUILT FOR EXPLORATION</span></footer>
     </aside>
