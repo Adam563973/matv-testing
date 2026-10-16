@@ -1,0 +1,43 @@
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<div id="app">
+  <div id="view">
+    <div id="camtag"></div>
+    <div id="hint">Drag: orbit · Wheel: zoom · <b>E</b>: next camera view</div>
+    <div id="labels"></div>
+  </div>
+  <aside id="panel">
+    <h1>F-16 MATV · AVEN nozzle bench<small>illustrative simulation – not real control software</small></h1>
+
+    <label>Throttle command <b id="thrV"></b></label>
+    <input type="range" id="thr" min="0" max="100" value="45">
+
+    <label>Nozzle command pad <i>(drag – relative, release to hold)</i></label>
+    <canvas id="pad" width="180" height="180"></canvas>
+
+    <label>Pitch cmd <b id="pitV"></b></label>
+    <input type="range" id="pit" min="-17" max="17" step="0.1" value="0">
+    <label>Yaw cmd <b id="yawV"></b></label>
+    <input type="range" id="yaw" min="-17" max="17" step="0.1" value="0">
+    <label>Actuator max rate <b id="rateV"></b></label>
+    <input type="range" id="rate" min="3" max="60" step="1" value="30">
+
+    <div class="btns">
+      <button id="bCentre">Centre nozzle</button>
+      <button id="bPause">Pause</button>
+      <button id="bReset">Reset all</button>
+    </div>
+    <label class="chk"><input type="checkbox" id="grab"> Drag directly on 3D nozzle (else orbit)</label>
+    <label class="chk"><input type="checkbox" id="auto"> Automatic nozzle demo</label>
+
+    <table id="tele"></table>
+
+    <details open>
+      <summary>Thrust-vectoring physics</summary>
+      <p>Engine thrust follows a first-order spool: <code>dT/dt = (T_cmd − T) / τ</code>.
+      The nozzle swings about a spherical pivot; the exhaust leaves along <code>d = (cos p·cos y, −sin p, cos p·sin y)</code>
+      and the force on the engine is <code>F = −T·d</code>.</p>
+      <p>Axes: forward = −X, up = +Y, right = −Z. Pitch + → force up, yaw + → force right.
+      Three actuators set the pose; their extensions come from the real linkage geometry.</p>
+    </details>
+  </aside>
+</div>
